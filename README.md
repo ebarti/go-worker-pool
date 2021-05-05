@@ -138,13 +138,7 @@ func main() {
 
 ```
 
-## New feature release
-
-04/21/2021: Now supporting multiple outputs from a single worker. 
-
 
 ## Version log
 
-- v1.1.0 Added Interceptor: a dummy type implementing Workerpool that other projects should use to facilitate testing.
-- v1.0.0 Initial stable release
-- v0.8.0 Now supporting multiple outputs from a single worker. 
+- v0.1.0 Initial release
