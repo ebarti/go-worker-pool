@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"path/filepath"
 	"reflect"
 	"runtime"
 	"runtime/debug"
@@ -25,16 +24,6 @@ var (
 		{
 			name:       "work basic",
 			task:       NewTestTask(workBasic()),
-			numWorkers: workerCount,
-		},
-		{
-			name:       "work basic with Print",
-			task:       NewTestTask(workBasicPrint()),
-			numWorkers: workerCount,
-		},
-		{
-			name:       "work basic with Print Byte",
-			task:       NewTestTask(workBasicPrintByte()),
 			numWorkers: workerCount,
 		},
 		{
@@ -89,22 +78,6 @@ func workBasicNoOut() func(w WorkerPool, in interface{}) error {
 	}
 }
 
-func workBasicPrint() func(w WorkerPool, in interface{}) error {
-	return func(w WorkerPool, in interface{}) error {
-		i := in.(int)
-		w.Print(fmt.Sprint(i))
-		return nil
-	}
-}
-
-func workBasicPrintByte() func(w WorkerPool, in interface{}) error {
-	return func(w WorkerPool, in interface{}) error {
-		i := in.(int)
-		w.PrintByte([]byte(fmt.Sprint(i)))
-		return nil
-	}
-}
-
 func workBasic() func(w WorkerPool, in interface{}) error {
 	return func(w WorkerPool, in interface{}) error {
 		i := in.(int)
@@ -132,10 +105,10 @@ func (tw *TestTypeTaskObject) Run(w WorkerPool, in interface{}) error {
 func workMultipleTypeOutput() func(w WorkerPool, in interface{}) error {
 	return func(w WorkerPool, in interface{}) error {
 		i := in.(int)
-		outtype1 := type1(strconv.Itoa(i) + " type1")
-		outtype2 := type2(strconv.Itoa(i) + " type2")
-		w.Out(outtype1)
-		w.Out(outtype2)
+		outType1 := type1(strconv.Itoa(i) + " type1")
+		outType2 := type2(strconv.Itoa(i) + " type2")
+		w.Out(outType1)
+		w.Out(outType2)
 		return nil
 	}
 }
@@ -182,14 +155,10 @@ func TestMain(m *testing.M) {
 }
 
 func TestWorkers(t *testing.T) {
-	f, err := os.Create(filepath.Join(os.TempDir(), "testfile.txt"))
-	if err != nil {
-		t.Fail()
-	}
 	for _, tt := range workerTestScenarios {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			workerOne := getWorker(ctx, tt).SetWriterOut(f).Work()
+			workerOne := getWorker(ctx, tt).Work()
 			// always need a consumer for the out tests so using basic here.
 			workerTwo := NewWorkerPool(ctx, NewTestTask(workBasicNoOut()), workerCount).ReceiveFrom(workerOne).Work()
 

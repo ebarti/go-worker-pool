@@ -1,11 +1,10 @@
 package workerpool
 
 import (
-	"bufio"
 	"context"
 	"errors"
+	"github.com/vbauerster/mpb/v6"
 	"golang.org/x/sync/semaphore"
-	"io"
 	"os"
 	"os/signal"
 	"reflect"
@@ -14,7 +13,6 @@ import (
 
 const (
 	sigChanBufferSize = 1
-	bufferFlushLimit  = 512
 )
 
 type WorkerPool interface {
@@ -28,10 +26,14 @@ type WorkerPool interface {
 	CancelOnSignal(signals ...os.Signal) WorkerPool
 	Wait() (err error)
 	IsDone() <-chan struct{}
-	SetWriterOut(writer io.Writer) WorkerPool
-	Print(msg string)
-	PrintByte(msg []byte)
 	Close() error
+	Progress() ProgressWorker
+}
+
+type ProgressWorker interface {
+	BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool
+	IncrementExpectedTotalBy(incrBy int)
+	SetDone()
 }
 
 // Task : interface to be implemented by a desired type
@@ -54,11 +56,14 @@ type workerPool struct {
 	sigChan         chan os.Signal
 	cancel          context.CancelFunc
 	requestStop     context.CancelFunc
-	writer          *bufio.Writer
 	sema            *semaphore.Weighted
-	mu              *sync.RWMutex
+	writeMu         *sync.RWMutex
+	progressMu      *sync.RWMutex
+	expectedTotal   int64
 	wg              *sync.WaitGroup
 	once            *sync.Once
+	doneOnce        *sync.Once
+	bar             *mpb.Bar
 }
 
 // NewWorkerPool : workerPool factory. Needs a defined number of workers to instantiate.
@@ -75,9 +80,8 @@ func NewWorkerPool(ctx context.Context, workerFunction Task, numberOfWorkers int
 		outTypedChan:    make(map[reflect.Type]chan interface{}),
 		cancel:          cancel,
 		requestStop:     requestStop,
-		writer:          bufio.NewWriter(os.Stdout),
 		sema:            semaphore.NewWeighted(numberOfWorkers),
-		mu:              new(sync.RWMutex),
+		writeMu:         new(sync.RWMutex),
 		wg:              new(sync.WaitGroup),
 		once:            new(sync.Once),
 	}
@@ -130,6 +134,7 @@ func (wp *workerPool) Work() WorkerPool {
 	wp.wg.Add(1)
 	go func() {
 		defer wp.wg.Done()
+		defer wp.SetDone()
 		var wg = new(sync.WaitGroup)
 		for {
 			select {
@@ -222,43 +227,68 @@ func (wp *workerPool) StopRequested() <-chan struct{} {
 	return wp.stopReqCtx.Done()
 }
 
-// SetWriterOut : sets the writer for the Print* functions
-func (wp *workerPool) SetWriterOut(writer io.Writer) WorkerPool {
-	wp.writer.Reset(writer)
-	return wp
-}
-
-// Print : prints output of a
-func (wp *workerPool) Print(msg string) {
-	wp.mu.Lock()
-	wp.internalBufferFlush()
-	_, _ = wp.writer.WriteString(msg)
-	wp.mu.Unlock()
-}
-
-// PrintByte : prints output of a
-func (wp *workerPool) PrintByte(msg []byte) {
-	wp.mu.Lock()
-	wp.internalBufferFlush()
-	_, _ = wp.writer.Write(msg)
-	wp.mu.Unlock()
-}
-
-// internalBufferFlush : makes sure we haven't used up the available buffer
-// by flushing the buffer when we get below the danger zone.
-func (wp *workerPool) internalBufferFlush() {
-	if wp.writer.Available() < bufferFlushLimit {
-		_ = wp.writer.Flush()
-	}
-}
-
 // Close : a channel if the receiver is looking for a close.
 // It indicates that no more data follows.
 func (wp *workerPool) Close() error {
 	wp.requestStop()
-	defer func() { _ = wp.writer.Flush() }()
 	if err := wp.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return nil
+}
+
+// Increment : increments the progress bar current count by 1 (if existent)
+func (wp *workerPool) Increment() {
+	if nil == wp.bar {
+		return
+	}
+	wp.progressMu.Lock()
+	defer wp.progressMu.Unlock()
+	wp.bar.Increment()
+}
+
+// IncrBy : increments the progress bar current count by a number (if existent)
+func (wp *workerPool) IncrBy(incrBy int) {
+	if nil == wp.bar {
+		return
+	}
+	wp.progressMu.Lock()
+	defer wp.progressMu.Unlock()
+	wp.bar.IncrBy(incrBy)
+}
+
+// IncrementExpectedTotalBy : sets the total expected by the bar
+func (wp *workerPool) IncrementExpectedTotalBy(incrBy int) {
+	if nil == wp.bar {
+		return
+	}
+	wp.progressMu.Lock()
+	defer wp.progressMu.Unlock()
+	wp.expectedTotal += int64(incrBy)
+	wp.bar.SetTotal(wp.expectedTotal, false)
+}
+
+// SetDone : sets the progress bar as done
+func (wp *workerPool) SetDone() {
+	if nil == wp.bar {
+		return
+	}
+	wp.doneOnce.Do(func() {
+		wp.progressMu.Lock()
+		defer wp.progressMu.Unlock()
+		wp.bar.SetTotal(wp.expectedTotal, true)
+	})
+}
+
+// BuildBar : creates a progress bar
+func (wp *workerPool) BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool {
+	wp.expectedTotal = int64(total)
+	wp.doneOnce = new(sync.Once)
+	wp.bar = p.AddBar(int64(total), options...)
+	return wp
+}
+
+// Progress : use this method to access the ProgressWorker interface
+func (wp *workerPool) Progress() ProgressWorker {
+	return wp
 }
