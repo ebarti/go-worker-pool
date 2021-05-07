@@ -48,16 +48,16 @@ type workerPool struct {
 	numberOfWorkers  int64
 	inChan           chan interface{}
 	outChan          chan interface{}
+	semaphore        chan struct{}
 	outTypedChan     map[reflect.Type]chan interface{}
 	sigChan          chan os.Signal
 	cancel           context.CancelFunc
 	requestStop      context.CancelFunc
 	sema             *semaphore.Weighted
-	muBar            *sync.RWMutex
+	mu               *sync.RWMutex
 	wg               *sync.WaitGroup
-	once             *sync.Once
 	expectedTotalBar int64
-	onceBar          *sync.Once
+	once             *sync.Once
 	bar              *mpb.Bar
 }
 
@@ -76,7 +76,9 @@ func NewWorkerPool(ctx context.Context, workerFunction Task, numberOfWorkers int
 		cancel:          cancel,
 		requestStop:     requestStop,
 		sema:            semaphore.NewWeighted(numberOfWorkers),
+		semaphore:       make(chan struct{}, numberOfWorkers),
 		wg:              new(sync.WaitGroup),
+		mu:              new(sync.RWMutex),
 		once:            new(sync.Once),
 	}
 }
@@ -144,21 +146,16 @@ func (wp *workerPool) Work() WorkerPool {
 				}
 				return
 			case in := <-wp.inChan:
-				err := wp.sema.Acquire(wp.Ctx, 1)
-				if err != nil {
-					return
-				}
+				wp.semaphore <- struct{}{}
 				wg.Add(1)
 				go func(in interface{}) {
-					defer wp.sema.Release(1)
-					defer wg.Done()
+					defer func() {
+						<-wp.semaphore
+						wg.Done()
+					}()
 					if err := wp.workerTask.Run(wp, in); err != nil {
-						wp.once.Do(func() {
-							wp.err = err
-							if wp.cancel != nil {
-								wp.cancel()
-							}
-						})
+						wp.err = err
+						wp.cancel()
 						return
 					}
 				}(in)
@@ -233,8 +230,6 @@ func (wp *workerPool) Close() error {
 
 // BuildBar : creates a progress bar
 func (wp *workerPool) BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool {
-	wp.onceBar = new(sync.Once)
-	wp.muBar = new(sync.RWMutex)
 	wp.expectedTotalBar = int64(total)
 	wp.bar = p.AddBar(int64(total), options...)
 	return wp
@@ -245,8 +240,8 @@ func (wp *workerPool) IncrementExpectedTotalBy(incrBy int) error {
 	if nil == wp.bar {
 		return errors.New("no progress bar present")
 	}
-	wp.muBar.Lock()
-	defer wp.muBar.Unlock()
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
 	wp.expectedTotalBar += int64(incrBy)
 	wp.bar.SetTotal(wp.expectedTotalBar, false)
 	return nil
@@ -257,7 +252,7 @@ func (wp *workerPool) setDone() {
 	if nil == wp.bar {
 		return
 	}
-	wp.onceBar.Do(func() {
+	wp.once.Do(func() {
 		wp.bar.SetTotal(0, true)
 	})
 }
@@ -267,8 +262,8 @@ func (wp *workerPool) Increment() {
 	if nil == wp.bar {
 		return
 	}
-	wp.muBar.Lock()
-	defer wp.muBar.Unlock()
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
 	wp.bar.Increment()
 }
 
@@ -277,7 +272,7 @@ func (wp *workerPool) IncrBy(incrBy int) {
 	if nil == wp.bar {
 		return
 	}
-	wp.muBar.Lock()
-	defer wp.muBar.Unlock()
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
 	wp.bar.IncrBy(incrBy)
 }

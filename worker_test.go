@@ -90,16 +90,15 @@ type type1 string
 type type2 string
 
 type TestTypeTaskObject struct {
-	testTask    func(w WorkerPool, in interface{}, out func(interface{})) error
-	interceptor *Interceptor
+	testTask func(w WorkerPool, in interface{}) error
 }
 
-func NewTestTypeTaskObject(wf func(w WorkerPool, in interface{}, out func(interface{})) error, i *Interceptor) *TestTypeTaskObject {
-	return &TestTypeTaskObject{wf, i}
+func NewTestTypeTaskObject(wf func(w WorkerPool, in interface{}, out func(interface{})) error) *TestTypeTaskObject {
+	return &TestTypeTaskObject{wf}
 }
 
 func (tw *TestTypeTaskObject) Run(w WorkerPool, in interface{}) error {
-	return tw.testTask(w, in, tw.interceptor.Out)
+	return tw.testTask(w, in)
 }
 
 func workMultipleTypeOutput() func(w WorkerPool, in interface{}) error {
@@ -119,7 +118,7 @@ func workBasicType1() func(w WorkerPool, in interface{}, out func(interface{})) 
 		if !ok {
 			return errors.New("Mismatch at Type1")
 		}
-		out(i)
+		w.Out(i)
 		return nil
 	}
 }
