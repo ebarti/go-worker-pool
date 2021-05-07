@@ -94,14 +94,16 @@ func (i *Interceptor) Close() error {
 }
 
 // IncrementExpectedTotalBy : dummy implementation of a WorkerPool
-func (i *Interceptor) IncrementExpectedTotalBy(incrBy int) {
+func (i *Interceptor) IncrementExpectedTotalBy(incrBy int) error {
 	// Noop
 	_ = incrBy
+	return nil
 }
 
-// SetProgressDone : dummy implementation of a WorkerPool
-func (i *Interceptor) SetProgressDone() {
+// IncrBy : dummy implementation of a WorkerPool
+func (i *Interceptor) IncrBy(incrBy int) {
 	// Noop
+	_ = incrBy
 }
 
 // BuildBar : dummy implementation of a WorkerPool
@@ -109,16 +111,6 @@ func (i *Interceptor) BuildBar(total int, p *mpb.Progress, options ...mpb.BarOpt
 	_, _, _ = total, p, options
 	// Noop
 	return i
-}
-
-// Progress : dummy implementation of a WorkerPool
-func (i *Interceptor) Progress() ProgressWorker {
-	return i
-}
-
-// SetDone : dummy implementation of a WorkerPool
-func (i *Interceptor) SetDone() {
-	// Noop
 }
 
 // GetOut : use this in our tests to retrieve the outfeeded values

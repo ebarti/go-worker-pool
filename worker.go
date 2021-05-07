@@ -27,13 +27,9 @@ type WorkerPool interface {
 	Wait() (err error)
 	IsDone() <-chan struct{}
 	Close() error
-	Progress() ProgressWorker
-}
-
-type ProgressWorker interface {
 	BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool
-	IncrementExpectedTotalBy(incrBy int)
-	SetDone()
+	IncrementExpectedTotalBy(incrBy int) error
+	IncrBy(incrBy int)
 }
 
 // Task : interface to be implemented by a desired type
@@ -45,25 +41,24 @@ type Task interface {
 
 // workerPool : a pool of workers that asynchronously execute a given task
 type workerPool struct {
-	Ctx             context.Context
-	stopReqCtx      context.Context
-	workerTask      Task
-	err             error
-	numberOfWorkers int64
-	inChan          chan interface{}
-	outChan         chan interface{}
-	outTypedChan    map[reflect.Type]chan interface{}
-	sigChan         chan os.Signal
-	cancel          context.CancelFunc
-	requestStop     context.CancelFunc
-	sema            *semaphore.Weighted
-	writeMu         *sync.RWMutex
-	progressMu      *sync.RWMutex
-	expectedTotal   int64
-	wg              *sync.WaitGroup
-	once            *sync.Once
-	doneOnce        *sync.Once
-	bar             *mpb.Bar
+	Ctx              context.Context
+	stopReqCtx       context.Context
+	workerTask       Task
+	err              error
+	numberOfWorkers  int64
+	inChan           chan interface{}
+	outChan          chan interface{}
+	outTypedChan     map[reflect.Type]chan interface{}
+	sigChan          chan os.Signal
+	cancel           context.CancelFunc
+	requestStop      context.CancelFunc
+	sema             *semaphore.Weighted
+	muBar            *sync.RWMutex
+	wg               *sync.WaitGroup
+	once             *sync.Once
+	expectedTotalBar int64
+	onceBar          *sync.Once
+	bar              *mpb.Bar
 }
 
 // NewWorkerPool : workerPool factory. Needs a defined number of workers to instantiate.
@@ -81,7 +76,6 @@ func NewWorkerPool(ctx context.Context, workerFunction Task, numberOfWorkers int
 		cancel:          cancel,
 		requestStop:     requestStop,
 		sema:            semaphore.NewWeighted(numberOfWorkers),
-		writeMu:         new(sync.RWMutex),
 		wg:              new(sync.WaitGroup),
 		once:            new(sync.Once),
 	}
@@ -134,7 +128,7 @@ func (wp *workerPool) Work() WorkerPool {
 	wp.wg.Add(1)
 	go func() {
 		defer wp.wg.Done()
-		defer wp.SetDone()
+		defer wp.setDone()
 		var wg = new(sync.WaitGroup)
 		for {
 			select {
@@ -237,13 +231,44 @@ func (wp *workerPool) Close() error {
 	return nil
 }
 
+// BuildBar : creates a progress bar
+func (wp *workerPool) BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool {
+	wp.onceBar = new(sync.Once)
+	wp.muBar = new(sync.RWMutex)
+	wp.expectedTotalBar = int64(total)
+	wp.bar = p.AddBar(int64(total), options...)
+	return wp
+}
+
+// IncrementExpectedTotalBy : sets the total expected by the bar
+func (wp *workerPool) IncrementExpectedTotalBy(incrBy int) error {
+	if nil == wp.bar {
+		return errors.New("no progress bar present")
+	}
+	wp.muBar.Lock()
+	defer wp.muBar.Unlock()
+	wp.expectedTotalBar += int64(incrBy)
+	wp.bar.SetTotal(wp.expectedTotalBar, false)
+	return nil
+}
+
+// setDone : sets the progress nar as done
+func (wp *workerPool) setDone() {
+	if nil == wp.bar {
+		return
+	}
+	wp.onceBar.Do(func() {
+		wp.bar.SetTotal(0, true)
+	})
+}
+
 // Increment : increments the progress bar current count by 1 (if existent)
 func (wp *workerPool) Increment() {
 	if nil == wp.bar {
 		return
 	}
-	wp.progressMu.Lock()
-	defer wp.progressMu.Unlock()
+	wp.muBar.Lock()
+	defer wp.muBar.Unlock()
 	wp.bar.Increment()
 }
 
@@ -252,43 +277,7 @@ func (wp *workerPool) IncrBy(incrBy int) {
 	if nil == wp.bar {
 		return
 	}
-	wp.progressMu.Lock()
-	defer wp.progressMu.Unlock()
+	wp.muBar.Lock()
+	defer wp.muBar.Unlock()
 	wp.bar.IncrBy(incrBy)
-}
-
-// IncrementExpectedTotalBy : sets the total expected by the bar
-func (wp *workerPool) IncrementExpectedTotalBy(incrBy int) {
-	if nil == wp.bar {
-		return
-	}
-	wp.progressMu.Lock()
-	defer wp.progressMu.Unlock()
-	wp.expectedTotal += int64(incrBy)
-	wp.bar.SetTotal(wp.expectedTotal, false)
-}
-
-// SetDone : sets the progress bar as done
-func (wp *workerPool) SetDone() {
-	if nil == wp.bar {
-		return
-	}
-	wp.doneOnce.Do(func() {
-		wp.progressMu.Lock()
-		defer wp.progressMu.Unlock()
-		wp.bar.SetTotal(wp.expectedTotal, true)
-	})
-}
-
-// BuildBar : creates a progress bar
-func (wp *workerPool) BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool {
-	wp.expectedTotal = int64(total)
-	wp.doneOnce = new(sync.Once)
-	wp.bar = p.AddBar(int64(total), options...)
-	return wp
-}
-
-// Progress : use this method to access the ProgressWorker interface
-func (wp *workerPool) Progress() ProgressWorker {
-	return wp
 }
