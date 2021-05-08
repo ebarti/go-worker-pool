@@ -90,15 +90,21 @@ type type1 string
 type type2 string
 
 type TestTypeTaskObject struct {
-	testTask func(w WorkerPool, in interface{}) error
+	testTask func(in interface{}, out func(interface{})) error
+	outs     []interface{}
 }
 
-func NewTestTypeTaskObject(wf func(w WorkerPool, in interface{}, out func(interface{})) error) *TestTypeTaskObject {
-	return &TestTypeTaskObject{wf}
+func NewTestTypeTaskObject(wf func(in interface{}, out func(interface{})) error) *TestTypeTaskObject {
+	return &TestTypeTaskObject{testTask: wf, outs: []interface{}{}}
+}
+
+func (tw *TestTypeTaskObject) appendOuts(out interface{}) {
+	tw.outs = append(tw.outs, out)
 }
 
 func (tw *TestTypeTaskObject) Run(w WorkerPool, in interface{}) error {
-	return tw.testTask(w, in)
+	_ = w
+	return tw.testTask(in, tw.appendOuts)
 }
 
 func workMultipleTypeOutput() func(w WorkerPool, in interface{}) error {
@@ -112,19 +118,19 @@ func workMultipleTypeOutput() func(w WorkerPool, in interface{}) error {
 	}
 }
 
-func workBasicType1() func(w WorkerPool, in interface{}, out func(interface{})) error {
-	return func(w WorkerPool, in interface{}, out func(interface{})) error {
+func workBasicType1() func(in interface{}, out func(interface{})) error {
+	return func(in interface{}, out func(interface{})) error {
 		i, ok := in.(type1)
 		if !ok {
 			return errors.New("Mismatch at Type1")
 		}
-		w.Out(i)
+		out(i)
 		return nil
 	}
 }
 
-func workBasicType2() func(w WorkerPool, in interface{}, out func(interface{})) error {
-	return func(w WorkerPool, in interface{}, out func(interface{})) error {
+func workBasicType2() func(in interface{}, out func(interface{})) error {
+	return func(in interface{}, out func(interface{})) error {
 		i, ok := in.(type2)
 		if !ok {
 			return errors.New("Mismatch at Type2")
@@ -181,11 +187,11 @@ func TestWorkersWithType(t *testing.T) {
 	ctx := context.Background()
 	var t1 type1
 	var t2 type2
-	interceptor1 := NewInterceptor()
-	interceptor2 := NewInterceptor()
+	task1 := NewTestTypeTaskObject(workBasicType1())
+	task2 := NewTestTypeTaskObject(workBasicType2())
 	workerOne := NewWorkerPool(ctx, NewTestTask(workMultipleTypeOutput()), 100).Work()
-	workerType1 := NewWorkerPool(ctx, NewTestTypeTaskObject(workBasicType1(), interceptor1), 100).ReceiveFromWithType(reflect.TypeOf(t1), workerOne).Work()
-	workerType2 := NewWorkerPool(ctx, NewTestTypeTaskObject(workBasicType2(), interceptor2), 100).ReceiveFromWithType(reflect.TypeOf(t2), workerOne).Work()
+	workerType1 := NewWorkerPool(ctx, task1, 100).ReceiveFromWithType(reflect.TypeOf(t1), workerOne).Work()
+	workerType2 := NewWorkerPool(ctx, task2, 100).ReceiveFromWithType(reflect.TypeOf(t2), workerOne).Work()
 	for i := 0; i < 2000; i++ {
 		workerOne.Send(i)
 	}
@@ -198,12 +204,12 @@ func TestWorkersWithType(t *testing.T) {
 	if err := workerType2.Close(); err != nil {
 		t.Error(err)
 	}
-	for _, v := range interceptor1.GetOut() {
+	for _, v := range task1.outs {
 		if _, ok := v.(type1); !ok {
 			t.Errorf("Error - mismatch of type 1")
 		}
 	}
-	for _, v := range interceptor2.GetOut() {
+	for _, v := range task2.outs {
 		if _, ok := v.(type2); !ok {
 			t.Errorf("Error - mismatch of type 1")
 		}
