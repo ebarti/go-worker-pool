@@ -1,6 +1,7 @@
 package workerpool
 
 import (
+	"github.com/vbauerster/mpb/v6"
 	"io"
 	"os"
 	"reflect"
@@ -90,6 +91,26 @@ func (i *Interceptor) PrintByte(msg []byte) {
 // Close : dummy implementation of a WorkerPool
 func (i *Interceptor) Close() error {
 	return nil
+}
+
+// IncrementExpectedTotalBy : dummy implementation of a WorkerPool
+func (i *Interceptor) IncrementExpectedTotalBy(incrBy int) error {
+	// Noop
+	_ = incrBy
+	return nil
+}
+
+// IncrBy : dummy implementation of a WorkerPool
+func (i *Interceptor) IncrBy(incrBy int) {
+	// Noop
+	_ = incrBy
+}
+
+// BuildBar : dummy implementation of a WorkerPool
+func (i *Interceptor) BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool {
+	_, _, _ = total, p, options
+	// Noop
+	return i
 }
 
 // GetOut : use this in our tests to retrieve the outfeeded values

@@ -1,11 +1,10 @@
 package workerpool
 
 import (
-	"bufio"
 	"context"
 	"errors"
+	"github.com/vbauerster/mpb/v6"
 	"golang.org/x/sync/semaphore"
-	"io"
 	"os"
 	"os/signal"
 	"reflect"
@@ -14,7 +13,6 @@ import (
 
 const (
 	sigChanBufferSize = 1
-	bufferFlushLimit  = 512
 )
 
 type WorkerPool interface {
@@ -28,10 +26,10 @@ type WorkerPool interface {
 	CancelOnSignal(signals ...os.Signal) WorkerPool
 	Wait() (err error)
 	IsDone() <-chan struct{}
-	SetWriterOut(writer io.Writer) WorkerPool
-	Print(msg string)
-	PrintByte(msg []byte)
 	Close() error
+	BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool
+	IncrementExpectedTotalBy(incrBy int) error
+	IncrBy(incrBy int)
 }
 
 // Task : interface to be implemented by a desired type
@@ -43,22 +41,24 @@ type Task interface {
 
 // workerPool : a pool of workers that asynchronously execute a given task
 type workerPool struct {
-	Ctx             context.Context
-	stopReqCtx      context.Context
-	workerTask      Task
-	err             error
-	numberOfWorkers int64
-	inChan          chan interface{}
-	outChan         chan interface{}
-	outTypedChan    map[reflect.Type]chan interface{}
-	sigChan         chan os.Signal
-	cancel          context.CancelFunc
-	requestStop     context.CancelFunc
-	writer          *bufio.Writer
-	sema            *semaphore.Weighted
-	mu              *sync.RWMutex
-	wg              *sync.WaitGroup
-	once            *sync.Once
+	Ctx              context.Context
+	stopReqCtx       context.Context
+	workerTask       Task
+	err              error
+	numberOfWorkers  int64
+	inChan           chan interface{}
+	outChan          chan interface{}
+	semaphore        chan struct{}
+	outTypedChan     map[reflect.Type]chan interface{}
+	sigChan          chan os.Signal
+	cancel           context.CancelFunc
+	requestStop      context.CancelFunc
+	sema             *semaphore.Weighted
+	mu               *sync.RWMutex
+	wg               *sync.WaitGroup
+	expectedTotalBar int64
+	once             *sync.Once
+	bar              *mpb.Bar
 }
 
 // NewWorkerPool : workerPool factory. Needs a defined number of workers to instantiate.
@@ -75,10 +75,10 @@ func NewWorkerPool(ctx context.Context, workerFunction Task, numberOfWorkers int
 		outTypedChan:    make(map[reflect.Type]chan interface{}),
 		cancel:          cancel,
 		requestStop:     requestStop,
-		writer:          bufio.NewWriter(os.Stdout),
 		sema:            semaphore.NewWeighted(numberOfWorkers),
-		mu:              new(sync.RWMutex),
+		semaphore:       make(chan struct{}, numberOfWorkers),
 		wg:              new(sync.WaitGroup),
+		mu:              new(sync.RWMutex),
 		once:            new(sync.Once),
 	}
 }
@@ -130,6 +130,7 @@ func (wp *workerPool) Work() WorkerPool {
 	wp.wg.Add(1)
 	go func() {
 		defer wp.wg.Done()
+		defer wp.setDone()
 		var wg = new(sync.WaitGroup)
 		for {
 			select {
@@ -145,21 +146,16 @@ func (wp *workerPool) Work() WorkerPool {
 				}
 				return
 			case in := <-wp.inChan:
-				err := wp.sema.Acquire(wp.Ctx, 1)
-				if err != nil {
-					return
-				}
+				wp.semaphore <- struct{}{}
 				wg.Add(1)
 				go func(in interface{}) {
-					defer wp.sema.Release(1)
-					defer wg.Done()
+					defer func() {
+						<-wp.semaphore
+						wg.Done()
+					}()
 					if err := wp.workerTask.Run(wp, in); err != nil {
-						wp.once.Do(func() {
-							wp.err = err
-							if wp.cancel != nil {
-								wp.cancel()
-							}
-						})
+						wp.err = err
+						wp.cancel()
 						return
 					}
 				}(in)
@@ -222,43 +218,61 @@ func (wp *workerPool) StopRequested() <-chan struct{} {
 	return wp.stopReqCtx.Done()
 }
 
-// SetWriterOut : sets the writer for the Print* functions
-func (wp *workerPool) SetWriterOut(writer io.Writer) WorkerPool {
-	wp.writer.Reset(writer)
-	return wp
-}
-
-// Print : prints output of a
-func (wp *workerPool) Print(msg string) {
-	wp.mu.Lock()
-	wp.internalBufferFlush()
-	_, _ = wp.writer.WriteString(msg)
-	wp.mu.Unlock()
-}
-
-// PrintByte : prints output of a
-func (wp *workerPool) PrintByte(msg []byte) {
-	wp.mu.Lock()
-	wp.internalBufferFlush()
-	_, _ = wp.writer.Write(msg)
-	wp.mu.Unlock()
-}
-
-// internalBufferFlush : makes sure we haven't used up the available buffer
-// by flushing the buffer when we get below the danger zone.
-func (wp *workerPool) internalBufferFlush() {
-	if wp.writer.Available() < bufferFlushLimit {
-		_ = wp.writer.Flush()
-	}
-}
-
 // Close : a channel if the receiver is looking for a close.
 // It indicates that no more data follows.
 func (wp *workerPool) Close() error {
 	wp.requestStop()
-	defer func() { _ = wp.writer.Flush() }()
 	if err := wp.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return nil
+}
+
+// BuildBar : creates a progress bar
+func (wp *workerPool) BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool {
+	wp.expectedTotalBar = int64(total)
+	wp.bar = p.AddBar(int64(total), options...)
+	return wp
+}
+
+// IncrementExpectedTotalBy : sets the total expected by the bar
+func (wp *workerPool) IncrementExpectedTotalBy(incrBy int) error {
+	if nil == wp.bar {
+		return errors.New("no progress bar present")
+	}
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+	wp.expectedTotalBar += int64(incrBy)
+	wp.bar.SetTotal(wp.expectedTotalBar, false)
+	return nil
+}
+
+// setDone : sets the progress nar as done
+func (wp *workerPool) setDone() {
+	if nil == wp.bar {
+		return
+	}
+	wp.once.Do(func() {
+		wp.bar.SetTotal(0, true)
+	})
+}
+
+// Increment : increments the progress bar current count by 1 (if existent)
+func (wp *workerPool) Increment() {
+	if nil == wp.bar {
+		return
+	}
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+	wp.bar.Increment()
+}
+
+// IncrBy : increments the progress bar current count by a number (if existent)
+func (wp *workerPool) IncrBy(incrBy int) {
+	if nil == wp.bar {
+		return
+	}
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+	wp.bar.IncrBy(incrBy)
 }
