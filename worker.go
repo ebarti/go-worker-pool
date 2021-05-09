@@ -29,8 +29,8 @@ type WorkerPool interface {
 	IsDone() <-chan struct{}
 	Close() error
 	BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool
-	IncrementExpectedTotalBy(incrBy int) error
-	IncrBy(incrBy int)
+	UpdateExpectedTotal(incrementTotalBy int) error
+	IncrementProgressBar(incrBy int)
 }
 
 // Task : interface to be implemented by a desired type
@@ -131,7 +131,7 @@ func (wp *workerPool) Work() WorkerPool {
 	go func() {
 		wp.wg.Add(1)
 		defer wp.wg.Done()
-		defer wp.setDone()
+		defer wp.notifyProgressBarDone()
 		var wg = new(sync.WaitGroup)
 		for {
 			select {
@@ -242,6 +242,7 @@ func (wp *workerPool) Close() error {
 	return nil
 }
 
+// runOutChanMux : multiplex the out channel to the right destination
 func (wp *workerPool) runOutChanMux() {
 	go func() {
 		wp.muxWg.Add(1)
@@ -273,20 +274,20 @@ func (wp *workerPool) BuildBar(total int, p *mpb.Progress, options ...mpb.BarOpt
 	return wp
 }
 
-// IncrementExpectedTotalBy : sets the total expected by the bar
-func (wp *workerPool) IncrementExpectedTotalBy(incrBy int) error {
+// UpdateExpectedTotal : sets the total expected by the bar
+func (wp *workerPool) UpdateExpectedTotal(incrementTotalBy int) error {
 	if nil == wp.bar {
 		return errors.New("no progress bar present")
 	}
 	wp.mu.Lock()
 	defer wp.mu.Unlock()
-	wp.expectedTotalBar += int64(incrBy)
+	wp.expectedTotalBar += int64(incrementTotalBy)
 	wp.bar.SetTotal(wp.expectedTotalBar, false)
 	return nil
 }
 
-// setDone : sets the progress nar as done
-func (wp *workerPool) setDone() {
+// notifyProgressBarDone : sets the progress bar as done
+func (wp *workerPool) notifyProgressBarDone() {
 	if nil == wp.bar {
 		return
 	}
@@ -295,18 +296,8 @@ func (wp *workerPool) setDone() {
 	})
 }
 
-// Increment : increments the progress bar current count by 1 (if existent)
-func (wp *workerPool) Increment() {
-	if nil == wp.bar {
-		return
-	}
-	wp.mu.Lock()
-	defer wp.mu.Unlock()
-	wp.bar.Increment()
-}
-
-// IncrBy : increments the progress bar current count by a number (if existent)
-func (wp *workerPool) IncrBy(incrBy int) {
+// IncrementProgressBar : increments the progress bar current count by a number (if existent)
+func (wp *workerPool) IncrementProgressBar(incrBy int) {
 	if nil == wp.bar {
 		return
 	}
