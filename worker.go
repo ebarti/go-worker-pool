@@ -137,8 +137,8 @@ func (wp *workerPool) Work() WorkerPool {
 					continue
 				}
 				wg.Wait()
-				wp.muxWg.Wait()
-				wp.cancel()
+				wp.cancelOutChanMux()
+				return
 			case <-wp.IsDone():
 				if wp.err == nil {
 					wp.err = context.Canceled
@@ -156,9 +156,7 @@ func (wp *workerPool) Work() WorkerPool {
 					if err := wp.workerTask.Run(in, wp.internalOutChan); err != nil {
 						wp.once.Do(func() {
 							wp.err = err
-							if wp.cancel != nil {
-								wp.cancel()
-							}
+							wp.cancel()
 						})
 						return
 					}
@@ -245,14 +243,12 @@ func (wp *workerPool) runOutChanMux() {
 		defer wp.muxWg.Done()
 		for {
 			select {
-			case <-wp.StopRequested():
-				if len(wp.internalOutChan) > 0 || len(wp.inChan) > 0 {
-					continue
-				}
-				wp.cancelOutChanMux()
 			case out := <-wp.internalOutChan:
 				wp.out(out)
-			case <-wp.IsOutMuxChanDone(): // should never happen
+			case <-wp.IsOutMuxChanDone():
+				if len(wp.internalOutChan) > 0 {
+					continue
+				}
 				return
 			case <-wp.IsDone(): // should never happen
 				return

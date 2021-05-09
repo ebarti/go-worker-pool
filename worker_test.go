@@ -108,7 +108,7 @@ type TestTypeTaskObject struct {
 }
 
 func NewTestTypeTaskObject(wf func(in interface{}, out chan<- interface{}) error) *TestTypeTaskObject {
-	return &TestTypeTaskObject{testTask: wf, out: make(chan interface{}), outs: []interface{}{}}
+	return &TestTypeTaskObject{testTask: wf, out: make(chan interface{}, 1500), outs: []interface{}{}}
 }
 
 func (tw *TestTypeTaskObject) Run(in interface{}, out chan<- interface{}) error {
@@ -133,22 +133,18 @@ func workMultipleTypeOutput() func(in interface{}, out chan<- interface{}) error
 
 func workBasicType1() func(in interface{}, out chan<- interface{}) error {
 	return func(in interface{}, out chan<- interface{}) error {
-		i, ok := in.(type1)
-		if !ok {
-			return errors.New("Mismatch at Type1")
+		if i, ok := in.(type1); ok {
+			out <- i
 		}
-		out <- i
 		return nil
 	}
 }
 
 func workBasicType2() func(in interface{}, out chan<- interface{}) error {
 	return func(in interface{}, out chan<- interface{}) error {
-		i, ok := in.(type2)
-		if !ok {
-			return errors.New("Mismatch at Type2")
+		if i, ok := in.(type2); ok {
+			out <- i
 		}
-		out <- i
 		return nil
 	}
 }
@@ -194,6 +190,7 @@ func TestWorkersWithType(t *testing.T) {
 	workerType1 := NewWorkerPool(ctx, type1task, 100).ReceiveFromWithType(reflect.TypeOf(t1), workerOne).Work()
 	workerType2 := NewWorkerPool(ctx, type2task, 100).ReceiveFromWithType(reflect.TypeOf(t2), workerOne).Work()
 	for i := 0; i < 500; i++ {
+		fmt.Println(i)
 		workerOne.Send(i)
 	}
 	if err := workerOne.Close(); err != nil {
@@ -205,12 +202,12 @@ func TestWorkersWithType(t *testing.T) {
 	if err := workerType2.Close(); err != nil {
 		t.Error(err)
 	}
-	for v := range type1task.out {
+	for _, v := range type1task.outs {
 		if _, ok := v.(type1); !ok {
 			t.Errorf("Error - mismatch of type 1")
 		}
 	}
-	for v := range type2task.out {
+	for _, v := range type2task.outs {
 		if _, ok := v.(type2); !ok {
 			t.Errorf("Error - mismatch of type 1")
 		}
