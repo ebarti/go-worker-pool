@@ -104,15 +104,20 @@ type type2 string
 type TestTypeTaskObject struct {
 	testTask func(in interface{}, out chan<- interface{}) error
 	out      chan interface{}
+	outs     []interface{}
 }
 
 func NewTestTypeTaskObject(wf func(in interface{}, out chan<- interface{}) error) *TestTypeTaskObject {
-	return &TestTypeTaskObject{testTask: wf, out: make(chan interface{}, RunTimes)}
+	return &TestTypeTaskObject{testTask: wf, out: make(chan interface{}, RunTimes), outs: []interface{}{}}
 }
 
 func (tw *TestTypeTaskObject) Run(in interface{}, out chan<- interface{}) error {
 	_ = out
-	return tw.testTask(in, tw.out)
+	if err := tw.testTask(in, tw.out); err != nil {
+		return err
+	}
+	tw.outs = append(tw.outs, <-tw.out)
+	return nil
 }
 
 func workMultipleTypeOutput() func(in interface{}, out chan<- interface{}) error {
@@ -151,7 +156,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func TestWorkers(t *testing.T) {
+func TestWorkerPool_WorkersNoType(t *testing.T) {
 	for _, tt := range workerTestScenarios {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -175,7 +180,7 @@ func TestWorkers(t *testing.T) {
 	}
 }
 
-func TestWorkersWithType(t *testing.T) {
+func TestWorkerPool_WorkersWithType(t *testing.T) {
 	ctx := context.Background()
 	var t1 type1
 	var t2 type2
@@ -196,28 +201,51 @@ func TestWorkersWithType(t *testing.T) {
 	if err := workerType2.Close(); err != nil {
 		t.Error(err)
 	}
-	close(type1task.out)
-	close(type2task.out)
-	for {
-		v, more := <-type1task.out
-		if more {
-			if _, ok := v.(type1); !ok {
-				t.Errorf("Error - mismatch of type 1")
-			}
-		} else {
-			break
+	for _, v := range type1task.outs {
+		if _, ok := v.(type1); !ok {
+			t.Errorf("Error - mismatch of type 1")
 		}
 	}
-	for {
-		v, more := <-type2task.out
-		if more {
-			if _, ok := v.(type2); !ok {
-				t.Errorf("Error - mismatch of type 2")
-			}
-		} else {
-			break
+	for _, v := range type2task.outs {
+		if _, ok := v.(type2); !ok {
+			t.Errorf("Error - mismatch of type 2")
 		}
 	}
+}
+
+func TestWorkerPool_WorkersWithTypeAndNoType(t *testing.T) {
+	ctx := context.Background()
+	var t1 type1
+	type1task := NewTestTypeTaskObject(workBasicType1())
+	type2task := NewTestTypeTaskObject(workBasicType2())
+	workerOne := NewWorkerPool(ctx, NewTestTask(workMultipleTypeOutput()), 100).Work()
+	workerType1 := NewWorkerPool(ctx, type1task, 100).ReceiveFromWithType(reflect.TypeOf(t1), workerOne).Work()
+	workerType2 := NewWorkerPool(ctx, type2task, 100).ReceiveFrom(workerOne).Work()
+	for i := 0; i < RunTimes; i++ {
+		workerOne.Send(i)
+	}
+	if err := workerOne.Close(); err != nil {
+		t.Error(err)
+	}
+	if err := workerType1.Close(); err != nil {
+		t.Error(err)
+	}
+	if err := workerType2.Close(); err != nil {
+		t.Error(err)
+	}
+	for _, v := range type1task.outs {
+		if _, ok := v.(type1); !ok {
+			t.Errorf("Error - mismatch of type 1")
+		}
+	}
+	for _, v := range type2task.outs {
+		if _, ok := v.(type2); !ok {
+			t.Errorf("Error - mismatch of type 2")
+		}
+	}
+}
+
+func TestWorkerPool_CancelOnSignal(t *testing.T) {
 
 }
 
