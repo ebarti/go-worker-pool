@@ -125,7 +125,6 @@ func (wp *workerPool) OutChannelWithType(t reflect.Type, out chan interface{}) {
 
 // Work : starts workers
 func (wp *workerPool) Work() WorkerPool {
-
 	wp.runOutChanMux()
 	go func() {
 		wp.wg.Add(1)
@@ -137,9 +136,9 @@ func (wp *workerPool) Work() WorkerPool {
 				if len(wp.inChan) > 0 {
 					continue
 				}
-				wp.cancelOutChanMux()
 				wg.Wait()
-
+				wp.muxWg.Wait()
+				wp.cancel()
 			case <-wp.IsDone():
 				if wp.err == nil {
 					wp.err = context.Canceled
@@ -224,8 +223,8 @@ func (wp *workerPool) StopRequested() <-chan struct{} {
 	return wp.stopReqCtx.Done()
 }
 
-// StopOutChanMuxRequested : returns a request to stop context's cancellation or error
-func (wp *workerPool) StopOutChanMuxRequested() <-chan struct{} {
+// IsOutMuxChanDone : returns a request to stop context's cancellation or error
+func (wp *workerPool) IsOutMuxChanDone() <-chan struct{} {
 	return wp.outChanMuxCtx.Done()
 }
 
@@ -246,14 +245,15 @@ func (wp *workerPool) runOutChanMux() {
 		defer wp.muxWg.Done()
 		for {
 			select {
-			case <-wp.StopOutChanMuxRequested():
-				if len(wp.internalOutChan) > 0 {
+			case <-wp.StopRequested():
+				if len(wp.internalOutChan) > 0 || len(wp.inChan) > 0 {
 					continue
 				}
-				wp.cancel()
-				return
+				wp.cancelOutChanMux()
 			case out := <-wp.internalOutChan:
 				wp.out(out)
+			case <-wp.IsOutMuxChanDone(): // should never happen
+				return
 			case <-wp.IsDone(): // should never happen
 				return
 			}

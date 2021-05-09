@@ -104,15 +104,20 @@ type type2 string
 type TestTypeTaskObject struct {
 	testTask func(in interface{}, out chan<- interface{}) error
 	out      chan interface{}
+	outs     []interface{}
 }
 
 func NewTestTypeTaskObject(wf func(in interface{}, out chan<- interface{}) error) *TestTypeTaskObject {
-	return &TestTypeTaskObject{testTask: wf, out: make(chan interface{})}
+	return &TestTypeTaskObject{testTask: wf, out: make(chan interface{}), outs: []interface{}{}}
 }
 
 func (tw *TestTypeTaskObject) Run(in interface{}, out chan<- interface{}) error {
 	_ = out
-	return tw.testTask(in, tw.out)
+	if err := tw.testTask(in, tw.out); err != nil {
+		return err
+	}
+	tw.outs = append(tw.outs, <-tw.out)
+	return nil
 }
 
 func workMultipleTypeOutput() func(in interface{}, out chan<- interface{}) error {
