@@ -3,7 +3,7 @@ package workerpool
 import (
 	"context"
 	"errors"
-	"golang.org/x/sync/semaphore"
+	"github.com/vbauerster/mpb/v6"
 	"os"
 	"os/signal"
 	"reflect"
@@ -28,10 +28,13 @@ type WorkerPool interface {
 	Wait() (err error)
 	IsDone() <-chan struct{}
 	Close() error
+	BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool
+	IncrementExpectedTotalBy(incrBy int) error
+	IncrBy(incrBy int)
 }
 
 // Task : interface to be implemented by a desired type
-// Its Run method is called by workerPool once the workers start
+// Its Run method is called by workerPool onceErr the workers start
 // and there is data sent to the channel via its Send method
 type Task interface {
 	Run(in interface{}, out chan<- interface{}) error
@@ -52,10 +55,15 @@ type workerPool struct {
 	cancel           context.CancelFunc
 	requestStop      context.CancelFunc
 	cancelOutChanMux context.CancelFunc
-	sema             *semaphore.Weighted
+	semaphore        chan struct{}
 	wg               *sync.WaitGroup
 	muxWg            *sync.WaitGroup
-	once             *sync.Once
+	onceErr          *sync.Once
+
+	onceBar          *sync.Once
+	mu               *sync.RWMutex
+	bar              *mpb.Bar
+	expectedTotalBar int64
 }
 
 // NewWorkerPool : workerPool factory. Needs a defined number of workers to instantiate.
@@ -76,10 +84,10 @@ func NewWorkerPool(ctx context.Context, workerFunction Task, numberOfWorkers int
 		cancel:           cancel,
 		requestStop:      requestStop,
 		cancelOutChanMux: cancelOutChanMux,
-		sema:             semaphore.NewWeighted(numberOfWorkers),
+		semaphore:        make(chan struct{}, numberOfWorkers),
 		wg:               new(sync.WaitGroup),
 		muxWg:            new(sync.WaitGroup),
-		once:             new(sync.Once),
+		onceErr:          new(sync.Once),
 	}
 }
 
@@ -110,7 +118,7 @@ func (wp *workerPool) ReceiveFromWithType(t reflect.Type, inWorker ...WorkerPool
 }
 
 // OutChannel : Sets the workers output channel to one provided.
-// This can only be called once per pool or an error will be returned.
+// This can only be called onceErr per pool or an error will be returned.
 func (wp *workerPool) OutChannel(t reflect.Type, out chan interface{}) {
 	if _, ok := wp.outTypedChan[t]; !ok {
 		wp.outTypedChan[t] = out
@@ -123,6 +131,7 @@ func (wp *workerPool) Work() WorkerPool {
 	go func() {
 		wp.wg.Add(1)
 		defer wp.wg.Done()
+		defer wp.setDone()
 		var wg = new(sync.WaitGroup)
 		for {
 			select {
@@ -139,16 +148,15 @@ func (wp *workerPool) Work() WorkerPool {
 				}
 				return
 			case in := <-wp.inChan:
-				err := wp.sema.Acquire(wp.Ctx, 1)
-				if err != nil {
-					return
-				}
+				wp.semaphore <- struct{}{}
 				wg.Add(1)
 				go func(in interface{}) {
-					defer wp.sema.Release(1)
-					defer wg.Done()
+					defer func() {
+						<-wp.semaphore
+						wg.Done()
+					}()
 					if err := wp.workerTask.Run(in, wp.internalOutChan); err != nil {
-						wp.once.Do(func() {
+						wp.onceErr.Do(func() {
 							wp.err = err
 							wp.cancel()
 						})
@@ -255,4 +263,54 @@ func (wp *workerPool) runOutChanMux() {
 			}
 		}
 	}()
+}
+
+// BuildBar : creates a progress bar
+func (wp *workerPool) BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool {
+	wp.expectedTotalBar = int64(total)
+	wp.onceBar = new(sync.Once)
+	wp.bar = p.AddBar(int64(total), options...)
+	return wp
+}
+
+// IncrementExpectedTotalBy : sets the total expected by the bar
+func (wp *workerPool) IncrementExpectedTotalBy(incrBy int) error {
+	if nil == wp.bar {
+		return errors.New("no progress bar present")
+	}
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+	wp.expectedTotalBar += int64(incrBy)
+	wp.bar.SetTotal(wp.expectedTotalBar, false)
+	return nil
+}
+
+// setDone : sets the progress nar as done
+func (wp *workerPool) setDone() {
+	if nil == wp.bar {
+		return
+	}
+	wp.onceBar.Do(func() {
+		wp.bar.SetTotal(0, true)
+	})
+}
+
+// Increment : increments the progress bar current count by 1 (if existent)
+func (wp *workerPool) Increment() {
+	if nil == wp.bar {
+		return
+	}
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+	wp.bar.Increment()
+}
+
+// IncrBy : increments the progress bar current count by a number (if existent)
+func (wp *workerPool) IncrBy(incrBy int) {
+	if nil == wp.bar {
+		return
+	}
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+	wp.bar.IncrBy(incrBy)
 }
