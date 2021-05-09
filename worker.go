@@ -14,13 +14,16 @@ const (
 	sigChanBufferSize = 1
 )
 
+type notAssigned struct{}
+
+var notAssignedType = reflect.TypeOf(notAssigned{})
+
 type WorkerPool interface {
 	Send(interface{})
 	ReceiveFrom(inWorker ...WorkerPool) WorkerPool
 	ReceiveFromWithType(t reflect.Type, inWorker ...WorkerPool) WorkerPool
 	Work() WorkerPool
-	OutChannel(out chan interface{})
-	OutChannelWithType(t reflect.Type, out chan interface{})
+	OutChannel(t reflect.Type, out chan interface{})
 	CancelOnSignal(signals ...os.Signal) WorkerPool
 	Wait() (err error)
 	IsDone() <-chan struct{}
@@ -43,7 +46,6 @@ type workerPool struct {
 	err              error
 	numberOfWorkers  int64
 	inChan           chan interface{}
-	outChan          chan interface{}
 	internalOutChan  chan interface{}
 	outTypedChan     map[reflect.Type]chan interface{}
 	sigChan          chan os.Signal
@@ -94,7 +96,7 @@ func (wp *workerPool) Send(in interface{}) {
 // ReceiveFrom : assigns workers out channel to this workers in channel
 func (wp *workerPool) ReceiveFrom(inWorker ...WorkerPool) WorkerPool {
 	for _, worker := range inWorker {
-		worker.OutChannel(wp.inChan)
+		worker.OutChannel(notAssignedType, wp.inChan)
 	}
 	return wp
 }
@@ -102,22 +104,14 @@ func (wp *workerPool) ReceiveFrom(inWorker ...WorkerPool) WorkerPool {
 // ReceiveFromWithType : assigns workers out channel to this workers in channel
 func (wp *workerPool) ReceiveFromWithType(t reflect.Type, inWorker ...WorkerPool) WorkerPool {
 	for _, worker := range inWorker {
-		worker.OutChannelWithType(t, wp.inChan)
+		worker.OutChannel(t, wp.inChan)
 	}
 	return wp
 }
 
 // OutChannel : Sets the workers output channel to one provided.
 // This can only be called once per pool or an error will be returned.
-func (wp *workerPool) OutChannel(out chan interface{}) {
-	if wp.outChan == nil {
-		wp.outChan = out
-	}
-}
-
-// OutChannelWithType : Sets the workers output channel to one provided.
-// This can only be called once per pool or an error will be returned.
-func (wp *workerPool) OutChannelWithType(t reflect.Type, out chan interface{}) {
+func (wp *workerPool) OutChannel(t reflect.Type, out chan interface{}) {
 	if _, ok := wp.outTypedChan[t]; !ok {
 		wp.outTypedChan[t] = out
 	}
@@ -169,19 +163,22 @@ func (wp *workerPool) Work() WorkerPool {
 
 // out : pushes value to workers out channel
 // Used when chaining worker pools.
-func (wp *workerPool) out(out interface{}) {
-	selectedChan := wp.outChan
+func (wp *workerPool) out(out interface{}) error {
+	selectedChan := wp.outTypedChan[notAssignedType]
 	for k, t := range wp.outTypedChan {
 		if k == reflect.TypeOf(out) {
 			selectedChan = t
 			break
 		}
 	}
+	if selectedChan == nil {
+		return errors.New("couldn't locate out chan")
+	}
 	select {
 	case <-wp.IsDone():
-		return
+		return nil
 	case selectedChan <- out:
-		return
+		return nil
 	}
 }
 
@@ -244,7 +241,10 @@ func (wp *workerPool) runOutChanMux() {
 		for {
 			select {
 			case out := <-wp.internalOutChan:
-				wp.out(out)
+				if err := wp.out(out); err != nil {
+					wp.err = err
+					wp.cancel()
+				}
 			case <-wp.IsOutMuxChanDone():
 				if len(wp.internalOutChan) > 0 {
 					continue

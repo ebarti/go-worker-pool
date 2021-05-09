@@ -104,20 +104,15 @@ type type2 string
 type TestTypeTaskObject struct {
 	testTask func(in interface{}, out chan<- interface{}) error
 	out      chan interface{}
-	outs     []interface{}
 }
 
 func NewTestTypeTaskObject(wf func(in interface{}, out chan<- interface{}) error) *TestTypeTaskObject {
-	return &TestTypeTaskObject{testTask: wf, out: make(chan interface{}, 1500), outs: []interface{}{}}
+	return &TestTypeTaskObject{testTask: wf, out: make(chan interface{}, RunTimes)}
 }
 
 func (tw *TestTypeTaskObject) Run(in interface{}, out chan<- interface{}) error {
 	_ = out
-	if err := tw.testTask(in, tw.out); err != nil {
-		return err
-	}
-	tw.outs = append(tw.outs, <-tw.out)
-	return nil
+	return tw.testTask(in, tw.out)
 }
 
 func workMultipleTypeOutput() func(in interface{}, out chan<- interface{}) error {
@@ -189,8 +184,7 @@ func TestWorkersWithType(t *testing.T) {
 	workerOne := NewWorkerPool(ctx, NewTestTask(workMultipleTypeOutput()), 100).Work()
 	workerType1 := NewWorkerPool(ctx, type1task, 100).ReceiveFromWithType(reflect.TypeOf(t1), workerOne).Work()
 	workerType2 := NewWorkerPool(ctx, type2task, 100).ReceiveFromWithType(reflect.TypeOf(t2), workerOne).Work()
-	for i := 0; i < 500; i++ {
-		fmt.Println(i)
+	for i := 0; i < RunTimes; i++ {
 		workerOne.Send(i)
 	}
 	if err := workerOne.Close(); err != nil {
@@ -202,16 +196,29 @@ func TestWorkersWithType(t *testing.T) {
 	if err := workerType2.Close(); err != nil {
 		t.Error(err)
 	}
-	for _, v := range type1task.outs {
-		if _, ok := v.(type1); !ok {
-			t.Errorf("Error - mismatch of type 1")
+	close(type1task.out)
+	close(type2task.out)
+	for {
+		v, more := <-type1task.out
+		if more {
+			if _, ok := v.(type1); !ok {
+				t.Errorf("Error - mismatch of type 1")
+			}
+		} else {
+			break
 		}
 	}
-	for _, v := range type2task.outs {
-		if _, ok := v.(type2); !ok {
-			t.Errorf("Error - mismatch of type 1")
+	for {
+		v, more := <-type2task.out
+		if more {
+			if _, ok := v.(type2); !ok {
+				t.Errorf("Error - mismatch of type 2")
+			}
+		} else {
+			break
 		}
 	}
+
 }
 
 func BenchmarkGoWorkers(b *testing.B) {
