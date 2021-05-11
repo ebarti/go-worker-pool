@@ -1,7 +1,6 @@
 # A Go Worker Pool Implementation
 
-![gopherbadger-tag-do-not-edit](./coverage_badge.png)
-
+[![Maintainability](https://api.codeclimate.com/v1/badges/3d3c7a37b1590458f2bf/maintainability)](https://codeclimate.com/github/ebarti/go-worker-pool/maintainability) [![Test Coverage](https://api.codeclimate.com/v1/badges/3d3c7a37b1590458f2bf/test_coverage)](https://codeclimate.com/github/ebarti/go-worker-pool/test_coverage)
 ## Install
 ```shell
 go get github.com/ebarti/go-worker-pool
