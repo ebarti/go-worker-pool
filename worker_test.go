@@ -45,7 +45,30 @@ var (
 	t2                  type2
 	testErr             = errors.New("test error")
 	workerTestScenarios = []workerTest{
-
+		{
+			name:       "work basic",
+			task:       NewTestTask(workBasic()),
+			numWorkers: workerCount,
+			typeConvFunction: func(i int) interface{} {
+				return i
+			},
+		},
+		{
+			name:       "work basic type 1",
+			task:       NewTestTask(workBasicType1()),
+			numWorkers: workerCount,
+			typeConvFunction: func(i int) interface{} {
+				return type1(strconv.Itoa(i))
+			},
+		},
+		{
+			name:       "work basic type 2",
+			task:       NewTestTask(workBasicType2()),
+			numWorkers: workerCount,
+			typeConvFunction: func(i int) interface{} {
+				return type2(strconv.Itoa(i))
+			},
+		},
 		{
 			name:        "work with return of error",
 			task:        NewTestTask(workWithError(testErr)),

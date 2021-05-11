@@ -25,7 +25,6 @@ type WorkerPool interface {
 	Work() WorkerPool
 	OutChannel(t reflect.Type, out chan interface{})
 	CancelOnSignal(signals ...os.Signal) WorkerPool
-	Wait() (err error)
 	IsDone() <-chan struct{}
 	Close() error
 	BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool
@@ -120,17 +119,12 @@ func (wp *workerPool) OutChannel(t reflect.Type, out chan interface{}) {
 
 // Work : starts workers
 func (wp *workerPool) Work() WorkerPool {
-	wp.wg.Add(2)
+	wp.wg.Add(1)
 	wp.runOutChanMux()
 	go func() {
 		var wg = new(sync.WaitGroup)
-
 		defer func() {
 			wg.Wait()
-			for len(wp.internalOutChan) > 0 {
-				// block
-			}
-			wp.closeInternalOuts()
 			wp.wg.Done()
 			wp.notifyProgressBarDone()
 		}()
@@ -201,11 +195,17 @@ func (wp *workerPool) CancelOnSignal(signals ...os.Signal) WorkerPool {
 	return wp
 }
 
-// Wait : waits for all the workers to finish up
-func (wp *workerPool) Wait() (err error) {
-	if wp.isLeader && wp.inChan != nil {
-		close(wp.inChan)
-	}
+// closeChannels : waits for all the workers to finish up
+func (wp *workerPool) closeChannels() (err error) {
+	wp.onceCloseOut.Do(func() {
+		if wp.isLeader && wp.inChan != nil {
+			close(wp.inChan)
+		}
+		close(wp.internalOutChan)
+		for _, c := range wp.outTypedChan {
+			close(c)
+		}
+	})
 	wp.wg.Wait()
 	return wp.err
 }
@@ -218,37 +218,24 @@ func (wp *workerPool) IsDone() <-chan struct{} {
 // Close : a channel if the receiver is looking for a close.
 // It indicates that no more data follows.
 func (wp *workerPool) Close() error {
-	for len(wp.inChan) > 0 || len(wp.semaphore) > 0 {
+	for len(wp.inChan) > 0 || len(wp.semaphore) > 0 || len(wp.internalOutChan) > 0 {
 		// block
 	}
-	if err := wp.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+	if err := wp.closeChannels(); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return nil
 }
 
-func (wp *workerPool) closeInternalOuts() {
-	wp.onceCloseOut.Do(func() {
-		close(wp.internalOutChan)
-		for _, c := range wp.outTypedChan {
-			close(c)
-		}
-	})
-}
-
 // runOutChanMux : multiplex the out channel to the right destination
 func (wp *workerPool) runOutChanMux() {
+	wp.wg.Add(1)
 	go func() {
 		defer wp.wg.Done()
 		for out := range wp.internalOutChan {
-			select {
-			case <-wp.IsDone(): // should never happen
-				return
-			default:
-				if err := wp.out(out); err != nil {
-					wp.err = err
-					wp.cancel()
-				}
+			if err := wp.out(out); err != nil {
+				wp.err = err
+				wp.cancel()
 			}
 		}
 	}()
