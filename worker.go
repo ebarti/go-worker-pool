@@ -25,7 +25,6 @@ type WorkerPool interface {
 	Work() WorkerPool
 	OutChannel(t reflect.Type, out chan interface{})
 	CancelOnSignal(signals ...os.Signal) WorkerPool
-	Wait() (err error)
 	IsDone() <-chan struct{}
 	Close() error
 	BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool
@@ -43,8 +42,6 @@ type Task interface {
 // workerPool : a pool of workers that asynchronously execute a given task
 type workerPool struct {
 	Ctx              context.Context
-	stopReqCtx       context.Context
-	outChanMuxCtx    context.Context
 	workerTask       Task
 	err              error
 	numberOfWorkers  int64
@@ -53,13 +50,11 @@ type workerPool struct {
 	outTypedChan     map[reflect.Type]chan interface{}
 	sigChan          chan os.Signal
 	cancel           context.CancelFunc
-	requestStop      context.CancelFunc
-	cancelOutChanMux context.CancelFunc
 	semaphore        chan struct{}
+	isLeader         bool
 	wg               *sync.WaitGroup
-	muxWg            *sync.WaitGroup
 	onceErr          *sync.Once
-
+	onceCloseOut     *sync.Once
 	onceBar          *sync.Once
 	mu               *sync.RWMutex
 	bar              *mpb.Bar
@@ -69,25 +64,20 @@ type workerPool struct {
 // NewWorkerPool : workerPool factory. Needs a defined number of workers to instantiate.
 func NewWorkerPool(ctx context.Context, workerFunction Task, numberOfWorkers int64) WorkerPool {
 	c, cancel := context.WithCancel(ctx)
-	stopReqCtx, requestStop := context.WithCancel(ctx)
-	outChanMuxCtx, cancelOutChanMux := context.WithCancel(ctx)
 	return &workerPool{
-		numberOfWorkers:  numberOfWorkers,
-		Ctx:              c,
-		stopReqCtx:       stopReqCtx,
-		outChanMuxCtx:    outChanMuxCtx,
-		workerTask:       workerFunction,
-		inChan:           make(chan interface{}, numberOfWorkers),
-		internalOutChan:  make(chan interface{}, numberOfWorkers),
-		sigChan:          make(chan os.Signal, sigChanBufferSize),
-		outTypedChan:     make(map[reflect.Type]chan interface{}),
-		cancel:           cancel,
-		requestStop:      requestStop,
-		cancelOutChanMux: cancelOutChanMux,
-		semaphore:        make(chan struct{}, numberOfWorkers),
-		wg:               new(sync.WaitGroup),
-		muxWg:            new(sync.WaitGroup),
-		onceErr:          new(sync.Once),
+		numberOfWorkers: numberOfWorkers,
+		Ctx:             c,
+		workerTask:      workerFunction,
+		inChan:          make(chan interface{}, numberOfWorkers),
+		internalOutChan: make(chan interface{}, numberOfWorkers),
+		sigChan:         make(chan os.Signal, sigChanBufferSize),
+		outTypedChan:    make(map[reflect.Type]chan interface{}),
+		cancel:          cancel,
+		semaphore:       make(chan struct{}, numberOfWorkers),
+		isLeader:        true,
+		wg:              new(sync.WaitGroup),
+		onceErr:         new(sync.Once),
+		onceCloseOut:    new(sync.Once),
 	}
 }
 
@@ -103,6 +93,7 @@ func (wp *workerPool) Send(in interface{}) {
 
 // ReceiveFrom : assigns workers out channel to this workers in channel
 func (wp *workerPool) ReceiveFrom(inWorker ...WorkerPool) WorkerPool {
+	wp.isLeader = false
 	for _, worker := range inWorker {
 		worker.OutChannel(notAssignedType, wp.inChan)
 	}
@@ -111,6 +102,7 @@ func (wp *workerPool) ReceiveFrom(inWorker ...WorkerPool) WorkerPool {
 
 // ReceiveFromWithType : assigns workers out channel to this workers in channel
 func (wp *workerPool) ReceiveFromWithType(t reflect.Type, inWorker ...WorkerPool) WorkerPool {
+	wp.isLeader = false
 	for _, worker := range inWorker {
 		worker.OutChannel(t, wp.inChan)
 	}
@@ -127,27 +119,21 @@ func (wp *workerPool) OutChannel(t reflect.Type, out chan interface{}) {
 
 // Work : starts workers
 func (wp *workerPool) Work() WorkerPool {
+	wp.wg.Add(1)
 	wp.runOutChanMux()
 	go func() {
-		wp.wg.Add(1)
-		defer wp.wg.Done()
-		defer wp.notifyProgressBarDone()
 		var wg = new(sync.WaitGroup)
-		for {
+		defer func() {
+			wg.Wait()
+			wp.wg.Done()
+			wp.notifyProgressBarDone()
+		}()
+		for in := range wp.inChan {
 			select {
-			case <-wp.StopRequested():
-				if len(wp.inChan) > 0 {
-					continue
-				}
-				wg.Wait()
-				wp.cancelOutChanMux()
-				return
-			case <-wp.IsDone():
-				if wp.err == nil {
-					wp.err = context.Canceled
-				}
-				return
-			case in := <-wp.inChan:
+			case <-wp.Ctx.Done():
+				wp.err = context.Canceled
+				continue
+			default:
 				wp.semaphore <- struct{}{}
 				wg.Add(1)
 				go func(in interface{}) {
@@ -209,10 +195,18 @@ func (wp *workerPool) CancelOnSignal(signals ...os.Signal) WorkerPool {
 	return wp
 }
 
-// Wait : waits for all the workers to finish up
-func (wp *workerPool) Wait() (err error) {
+// closeChannels : waits for all the workers to finish up
+func (wp *workerPool) closeChannels() (err error) {
+	wp.onceCloseOut.Do(func() {
+		if wp.isLeader && wp.inChan != nil {
+			close(wp.inChan)
+		}
+		close(wp.internalOutChan)
+		for _, c := range wp.outTypedChan {
+			close(c)
+		}
+	})
 	wp.wg.Wait()
-	wp.muxWg.Wait()
 	return wp.err
 }
 
@@ -221,22 +215,13 @@ func (wp *workerPool) IsDone() <-chan struct{} {
 	return wp.Ctx.Done()
 }
 
-// StopRequested : returns a request to stop context's cancellation or error
-func (wp *workerPool) StopRequested() <-chan struct{} {
-	return wp.stopReqCtx.Done()
-}
-
-// IsOutMuxChanDone : returns a request to stop context's cancellation or error
-func (wp *workerPool) IsOutMuxChanDone() <-chan struct{} {
-	return wp.outChanMuxCtx.Done()
-}
-
 // Close : a channel if the receiver is looking for a close.
 // It indicates that no more data follows.
 func (wp *workerPool) Close() error {
-	wp.requestStop()
-
-	if err := wp.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+	for len(wp.inChan) > 0 || len(wp.semaphore) > 0 || len(wp.internalOutChan) > 0 {
+		// block
+	}
+	if err := wp.closeChannels(); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	return nil
@@ -244,23 +229,13 @@ func (wp *workerPool) Close() error {
 
 // runOutChanMux : multiplex the out channel to the right destination
 func (wp *workerPool) runOutChanMux() {
+	wp.wg.Add(1)
 	go func() {
-		wp.muxWg.Add(1)
-		defer wp.muxWg.Done()
-		for {
-			select {
-			case out := <-wp.internalOutChan:
-				if err := wp.out(out); err != nil {
-					wp.err = err
-					wp.cancel()
-				}
-			case <-wp.IsOutMuxChanDone():
-				if len(wp.internalOutChan) > 0 {
-					continue
-				}
-				return
-			case <-wp.IsDone(): // should never happen
-				return
+		defer wp.wg.Done()
+		for out := range wp.internalOutChan {
+			if err := wp.out(out); err != nil {
+				wp.err = err
+				wp.cancel()
 			}
 		}
 	}()
