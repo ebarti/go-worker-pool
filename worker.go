@@ -14,14 +14,9 @@ const (
 	sigChanBufferSize = 1
 )
 
-type notAssigned struct{}
-
-var notAssignedType = reflect.TypeOf(notAssigned{})
-
 type WorkerPool interface {
 	Send(interface{})
-	ReceiveFrom(inWorker ...WorkerPool) WorkerPool
-	ReceiveFromWithType(t reflect.Type, inWorker ...WorkerPool) WorkerPool
+	ReceiveFrom(t reflect.Type, inWorker ...WorkerPool) WorkerPool
 	Work() WorkerPool
 	OutChannel(t reflect.Type, out chan interface{})
 	CancelOnSignal(signals ...os.Signal) WorkerPool
@@ -92,16 +87,7 @@ func (wp *workerPool) Send(in interface{}) {
 }
 
 // ReceiveFrom : assigns workers out channel to this workers in channel
-func (wp *workerPool) ReceiveFrom(inWorker ...WorkerPool) WorkerPool {
-	wp.isLeader = false
-	for _, worker := range inWorker {
-		worker.OutChannel(notAssignedType, wp.inChan)
-	}
-	return wp
-}
-
-// ReceiveFromWithType : assigns workers out channel to this workers in channel
-func (wp *workerPool) ReceiveFromWithType(t reflect.Type, inWorker ...WorkerPool) WorkerPool {
+func (wp *workerPool) ReceiveFrom(t reflect.Type, inWorker ...WorkerPool) WorkerPool {
 	wp.isLeader = false
 	for _, worker := range inWorker {
 		worker.OutChannel(t, wp.inChan)
@@ -158,7 +144,7 @@ func (wp *workerPool) Work() WorkerPool {
 // out : pushes value to workers out channel
 // Used when chaining worker pools.
 func (wp *workerPool) out(out interface{}) error {
-	selectedChan := wp.outTypedChan[notAssignedType]
+	selectedChan := wp.outTypedChan[reflect.TypeOf(nil)]
 	for k, t := range wp.outTypedChan {
 		if k == reflect.TypeOf(out) {
 			selectedChan = t

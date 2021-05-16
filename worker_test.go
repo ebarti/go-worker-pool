@@ -172,7 +172,7 @@ func TestWorkerPool_WorkersNoType(t *testing.T) {
 			workerOne := getWorker(ctx, tt).Work()
 			// always need a consumer for the out tests so using basic here.
 			taskTwo := NewTestTaskObjectOutputSave(workBasic())
-			workerTwo := NewWorkerPool(ctx, taskTwo, workerCount).ReceiveFrom(workerOne).Work()
+			workerTwo := NewWorkerPool(ctx, taskTwo, workerCount).ReceiveFrom(nil, workerOne).Work()
 
 			for i := 0; i < RunTimes; i++ {
 				workerOne.Send(tt.typeConvFunction(i))
@@ -202,8 +202,8 @@ func TestWorkerPool_WorkersWithType(t *testing.T) {
 
 	workerOne := NewWorkerPool(ctx, NewTestTask(workMultipleTypeOutput()), workerCount).Work()
 
-	workerType1 := NewWorkerPool(ctx, type1task, workerCount).ReceiveFromWithType(reflect.TypeOf(t1), workerOne).Work()
-	workerType2 := NewWorkerPool(ctx, type2task, workerCount).ReceiveFromWithType(reflect.TypeOf(t2), workerOne).Work()
+	workerType1 := NewWorkerPool(ctx, type1task, workerCount).ReceiveFrom(reflect.TypeOf(t1), workerOne).Work()
+	workerType2 := NewWorkerPool(ctx, type2task, workerCount).ReceiveFrom(reflect.TypeOf(t2), workerOne).Work()
 
 	for i := 0; i < RunTimes; i++ {
 		workerOne.Send(i)
@@ -242,8 +242,8 @@ func TestWorkerPool_WorkersWithTypeAndNoType(t *testing.T) {
 	type1task := NewTestTaskObjectOutputSave(workBasicType1())
 	type2task := NewTestTaskObjectOutputSave(workBasicType2())
 	workerOne := NewWorkerPool(ctx, NewTestTask(workMultipleTypeOutput()), 100).Work()
-	workerType1 := NewWorkerPool(ctx, type1task, 100).ReceiveFromWithType(reflect.TypeOf(t1), workerOne).Work()
-	workerType2 := NewWorkerPool(ctx, type2task, 100).ReceiveFrom(workerOne).Work()
+	workerType1 := NewWorkerPool(ctx, type1task, 100).ReceiveFrom(reflect.TypeOf(t1), workerOne).Work()
+	workerType2 := NewWorkerPool(ctx, type2task, 100).ReceiveFrom(nil, workerOne).Work()
 	for i := 0; i < RunTimes; i++ {
 		workerOne.Send(i)
 	}
