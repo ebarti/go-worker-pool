@@ -334,7 +334,7 @@ func Test_workerPool_UpdateExpectedTotal(t *testing.T) {
 		t.Errorf("Should not be complete!")
 	}
 	if err := worker.UpdateExpectedTotal(-1); err != nil {
-		t.Errorf("Test failed with error ", err)
+		t.Errorf("Test failed with error %v", err)
 	}
 	worker.IncrementProgressBar(9)
 	if worker.bar.Completed() {
