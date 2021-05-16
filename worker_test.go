@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/vbauerster/mpb/v6"
 	"math/rand"
 	"os"
 	"reflect"
@@ -290,4 +291,53 @@ func BenchmarkGoWorkers(b *testing.B) {
 	}
 	b.StopTimer()
 	_ = worker.Close()
+}
+
+func Test_workerPool_BuildBar(t *testing.T) {
+	worker := &workerPool{}
+	if nil != worker.bar {
+		t.Errorf("Bar was built before we wanted one!")
+	}
+	p := mpb.New()
+	worker.BuildBar(10, p)
+	if nil == worker.bar {
+		t.Errorf("Failed to build bar")
+	}
+}
+
+func Test_workerPool_IncrementProgressBar(t *testing.T) {
+	worker := &workerPool{mu: new(sync.RWMutex)}
+	p := mpb.New()
+	worker.BuildBar(10, p)
+	if nil == worker.bar {
+		t.Errorf("Failed to build bar")
+	}
+	worker.IncrementProgressBar(1)
+	if worker.bar.Completed() {
+		t.Errorf("Should not be complete!")
+	}
+	worker.IncrementProgressBar(9)
+	if !worker.bar.Completed() {
+		t.Errorf("Should be complete!")
+	}
+}
+
+func Test_workerPool_UpdateExpectedTotal(t *testing.T) {
+	worker := &workerPool{mu: new(sync.RWMutex)}
+	p := mpb.New()
+	worker.BuildBar(10, p)
+	if nil == worker.bar {
+		t.Errorf("Failed to build bar")
+	}
+	worker.IncrementProgressBar(1)
+	if worker.bar.Completed() {
+		t.Errorf("Should not be complete!")
+	}
+	if err := worker.UpdateExpectedTotal(-1); err != nil {
+		t.Errorf("Test failed with error ", err)
+	}
+	worker.IncrementProgressBar(9)
+	if worker.bar.Completed() {
+		t.Errorf("Should not be complete!")
+	}
 }
