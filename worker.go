@@ -184,13 +184,8 @@ func (wp *workerPool) CancelOnSignal(signals ...os.Signal) WorkerPool {
 // closeChannels : waits for all the workers to finish up
 func (wp *workerPool) closeChannels() (err error) {
 	wp.onceCloseOut.Do(func() {
-		if wp.isLeader && wp.inChan != nil {
-			close(wp.inChan)
-		}
+		close(wp.inChan)
 		close(wp.internalOutChan)
-		for _, c := range wp.outTypedChan {
-			close(c)
-		}
 	})
 	wp.wg.Wait()
 	return wp.err

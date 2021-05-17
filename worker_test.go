@@ -23,14 +23,6 @@ const (
 type type1 string
 type type2 string
 
-type workerTest struct {
-	name             string
-	task             Task
-	numWorkers       int64
-	errExpected      bool
-	typeConvFunction func(int) interface{}
-}
-
 type TestTaskObject struct {
 	testTask func(in interface{}, out chan<- interface{}) error
 }
@@ -42,49 +34,9 @@ type TestTaskObjectOutputSave struct {
 }
 
 var (
-	t1                  type1
-	t2                  type2
-	testErr             = errors.New("test error")
-	workerTestScenarios = []workerTest{
-		{
-			name:       "work basic",
-			task:       NewTestTask(workBasic()),
-			numWorkers: workerCount,
-			typeConvFunction: func(i int) interface{} {
-				return i
-			},
-		},
-		{
-			name:       "work basic type 1",
-			task:       NewTestTask(workBasicType1()),
-			numWorkers: workerCount,
-			typeConvFunction: func(i int) interface{} {
-				return type1(strconv.Itoa(i))
-			},
-		},
-		{
-			name:       "work basic type 2",
-			task:       NewTestTask(workBasicType2()),
-			numWorkers: workerCount,
-			typeConvFunction: func(i int) interface{} {
-				return type2(strconv.Itoa(i))
-			},
-		},
-		{
-			name:        "work with return of error",
-			task:        NewTestTask(workWithError(testErr)),
-			errExpected: true,
-			numWorkers:  workerCount,
-			typeConvFunction: func(i int) interface{} {
-				return i
-			},
-		},
-	}
-
-	getWorker = func(ctx context.Context, wt workerTest) WorkerPool {
-		worker := NewWorkerPool(ctx, wt.task, wt.numWorkers)
-		return worker
-	}
+	t1  type1
+	t2  type2
+	ctx context.Context = context.Background()
 )
 
 func NewTestTask(wf func(in interface{}, out chan<- interface{}) error) *TestTaskObject {
@@ -167,10 +119,51 @@ func TestMain(m *testing.M) {
 }
 
 func TestWorkerPool_WorkersNoType(t *testing.T) {
+	type workerTest struct {
+		name             string
+		task             Task
+		numWorkers       int64
+		errExpected      bool
+		typeConvFunction func(int) interface{}
+	}
+	workerTestScenarios := []workerTest{
+		{
+			name:       "work basic",
+			task:       NewTestTask(workBasic()),
+			numWorkers: workerCount,
+			typeConvFunction: func(i int) interface{} {
+				return i
+			},
+		},
+		{
+			name:       "work basic type 1",
+			task:       NewTestTask(workBasicType1()),
+			numWorkers: workerCount,
+			typeConvFunction: func(i int) interface{} {
+				return type1(strconv.Itoa(i))
+			},
+		},
+		{
+			name:       "work basic type 2",
+			task:       NewTestTask(workBasicType2()),
+			numWorkers: workerCount,
+			typeConvFunction: func(i int) interface{} {
+				return type2(strconv.Itoa(i))
+			},
+		},
+		{
+			name:        "work with return of error",
+			task:        NewTestTask(workWithError(errors.New("test error"))),
+			errExpected: true,
+			numWorkers:  workerCount,
+			typeConvFunction: func(i int) interface{} {
+				return i
+			},
+		},
+	}
 	for _, tt := range workerTestScenarios {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			workerOne := getWorker(ctx, tt).Work()
+			workerOne := NewWorkerPool(ctx, tt.task, tt.numWorkers).Work()
 			// always need a consumer for the out tests so using basic here.
 			taskTwo := NewTestTaskObjectOutputSave(workBasic())
 			workerTwo := NewWorkerPool(ctx, taskTwo, workerCount).ReceiveFrom(nil, workerOne).Work()
@@ -239,12 +232,11 @@ func TestWorkerPool_WorkersWithType(t *testing.T) {
 }
 
 func TestWorkerPool_WorkersWithTypeAndNoType(t *testing.T) {
-	ctx := context.Background()
 	type1task := NewTestTaskObjectOutputSave(workBasicType1())
 	type2task := NewTestTaskObjectOutputSave(workBasicType2())
 	workerOne := NewWorkerPool(ctx, NewTestTask(workMultipleTypeOutput()), 100).Work()
 	workerType1 := NewWorkerPool(ctx, type1task, 100).ReceiveFrom(reflect.TypeOf(t1), workerOne).Work()
-	workerType2 := NewWorkerPool(ctx, type2task, 100).ReceiveFrom(nil, workerOne).Work()
+	workerType2 := NewWorkerPool(ctx, type2task, 100).ReceiveFrom(reflect.TypeOf(t2), workerOne).Work()
 	for i := 0; i < RunTimes; i++ {
 		workerOne.Send(i)
 	}
@@ -273,24 +265,6 @@ func TestWorkerPool_WorkersWithTypeAndNoType(t *testing.T) {
 			t.Errorf("Error - mismatch of type 2")
 		}
 	}
-}
-
-func BenchmarkGoWorkers(b *testing.B) {
-	ctx := context.Background()
-	workBasicNoOut := func(in interface{}, out chan<- interface{}) error {
-		_ = in.(int)
-		return nil
-	}
-	worker := NewWorkerPool(ctx, NewTestTask(workBasicNoOut), workerCount).Work()
-
-	b.StartTimer()
-	for i := 0; i < b.N; i++ {
-		for j := 0; j < RunTimes; j++ {
-			worker.Send(j)
-		}
-	}
-	b.StopTimer()
-	_ = worker.Close()
 }
 
 func Test_workerPool_BuildBar(t *testing.T) {
@@ -340,4 +314,21 @@ func Test_workerPool_UpdateExpectedTotal(t *testing.T) {
 	if worker.bar.Completed() {
 		t.Errorf("Should not be complete!")
 	}
+}
+
+func BenchmarkGoWorkers(b *testing.B) {
+	workBasicNoOut := func(in interface{}, out chan<- interface{}) error {
+		_ = in.(int)
+		return nil
+	}
+	worker := NewWorkerPool(ctx, NewTestTask(workBasicNoOut), workerCount).Work()
+
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < RunTimes; j++ {
+			worker.Send(j)
+		}
+	}
+	b.StopTimer()
+	_ = worker.Close()
 }
