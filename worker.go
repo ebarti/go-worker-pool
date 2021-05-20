@@ -123,6 +123,7 @@ func (wp *workerPool) Work() WorkerPool {
 				wg.Add(1)
 				go func(in interface{}) {
 					defer func() {
+						wp.incrementProgressBar(1)
 						<-wp.semaphore
 						wg.Done()
 					}()
@@ -133,7 +134,6 @@ func (wp *workerPool) Work() WorkerPool {
 						})
 						return
 					}
-					wp.incrementProgressBar(1)
 				}(in)
 			}
 		}
@@ -226,6 +226,7 @@ func (wp *workerPool) runOutChanMux() {
 func (wp *workerPool) BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool {
 	wp.expectedTotalBar = int64(total)
 	wp.onceBar = new(sync.Once)
+	wp.mu = new(sync.RWMutex)
 	wp.bar = p.AddBar(int64(total), options...)
 	return wp
 }

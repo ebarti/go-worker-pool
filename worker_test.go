@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/vbauerster/mpb/v6"
+	"github.com/vbauerster/mpb/v6/decor"
 	"math/rand"
 	"os"
 	"reflect"
@@ -118,7 +119,20 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func TestWorkerPool_WorkersNoType(t *testing.T) {
+func getBarOptions(name string) []mpb.BarOption {
+	return []mpb.BarOption{
+		mpb.BarFillerClearOnComplete(),
+		mpb.PrependDecorators(
+			decor.Name(name, decor.WC{W: len(name) + 1, C: decor.DidentRight}),
+			decor.OnComplete(decor.Name("running", decor.WCSyncSpaceR), "complete!"),
+		),
+		mpb.AppendDecorators(
+			decor.OnComplete(decor.Percentage(decor.WC{W: 5}), ""),
+		),
+	}
+}
+
+func TestWorkerPool_WorkersNoTypeAndProgressBars(t *testing.T) {
 	type workerTest struct {
 		name             string
 		task             Task
@@ -163,10 +177,11 @@ func TestWorkerPool_WorkersNoType(t *testing.T) {
 	}
 	for _, tt := range workerTestScenarios {
 		t.Run(tt.name, func(t *testing.T) {
-			workerOne := NewWorkerPool(ctx, tt.task, tt.numWorkers).Work()
+			p := mpb.New()
+			workerOne := NewWorkerPool(ctx, tt.task, tt.numWorkers).BuildBar(RunTimes, p, getBarOptions(tt.name)...).Work()
 			// always need a consumer for the out tests so using basic here.
 			taskTwo := NewTestTaskObjectOutputSave(workBasic())
-			workerTwo := NewWorkerPool(ctx, taskTwo, workerCount).ReceiveFrom(nil, workerOne).Work()
+			workerTwo := NewWorkerPool(ctx, taskTwo, workerCount).ReceiveFrom(nil, workerOne).BuildBar(RunTimes, p, getBarOptions(tt.name)...).Work()
 
 			for i := 0; i < RunTimes; i++ {
 				workerOne.Send(tt.typeConvFunction(i))
@@ -180,12 +195,26 @@ func TestWorkerPool_WorkersNoType(t *testing.T) {
 				fmt.Println(err)
 				t.Fail()
 			}
+			if !tt.errExpected {
+				if len(taskTwo.outs) != RunTimes {
+					t.Errorf("did not get expected count for test %s. Wanted %d but got %d", tt.name, RunTimes, len(taskTwo.outs))
+				}
+				worker1 := workerOne.(*workerPool)
+				worker2 := workerTwo.(*workerPool)
 
-			if !tt.errExpected && len(taskTwo.outs) != RunTimes {
-				t.Errorf("did not get expected count for test %s. Wanted %d but got %d", tt.name, RunTimes, len(taskTwo.outs))
+				if !worker1.bar.Completed() {
+					t.Error("Worker one should be done")
+				}
+				if !worker2.bar.Completed() {
+					t.Error("Worker two should be done")
+				}
 			}
 		})
 	}
+}
+
+func TestWorkerPool_WithProgressBars(t *testing.T) {
+
 }
 
 func TestWorkerPool_WorkersWithType(t *testing.T) {
@@ -267,7 +296,7 @@ func TestWorkerPool_WorkersWithTypeAndNoType(t *testing.T) {
 	}
 }
 
-func Test_workerPool_BuildBar(t *testing.T) {
+func TestWorkerPool_BuildBar(t *testing.T) {
 	worker := &workerPool{}
 	if nil != worker.bar {
 		t.Errorf("Bar was built before we wanted one!")
@@ -279,7 +308,7 @@ func Test_workerPool_BuildBar(t *testing.T) {
 	}
 }
 
-func Test_workerPool_IncrementProgressBar(t *testing.T) {
+func TestWorkerPool_IncrementProgressBar(t *testing.T) {
 	worker := &workerPool{mu: new(sync.RWMutex)}
 	p := mpb.New()
 	worker.BuildBar(10, p)
@@ -296,7 +325,7 @@ func Test_workerPool_IncrementProgressBar(t *testing.T) {
 	}
 }
 
-func Test_workerPool_UpdateExpectedTotal(t *testing.T) {
+func TestWorkerPool_UpdateExpectedTotal(t *testing.T) {
 	worker := &workerPool{mu: new(sync.RWMutex)}
 	p := mpb.New()
 	worker.BuildBar(10, p)
