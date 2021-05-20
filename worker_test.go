@@ -286,11 +286,11 @@ func Test_workerPool_IncrementProgressBar(t *testing.T) {
 	if nil == worker.bar {
 		t.Errorf("Failed to build bar")
 	}
-	worker.IncrementProgressBar(1)
+	worker.incrementProgressBar(1)
 	if worker.bar.Completed() {
 		t.Errorf("Should not be complete!")
 	}
-	worker.IncrementProgressBar(9)
+	worker.incrementProgressBar(9)
 	if !worker.bar.Completed() {
 		t.Errorf("Should be complete!")
 	}
@@ -303,15 +303,19 @@ func Test_workerPool_UpdateExpectedTotal(t *testing.T) {
 	if nil == worker.bar {
 		t.Errorf("Failed to build bar")
 	}
-	worker.IncrementProgressBar(1)
+	worker.incrementProgressBar(1)
 	if worker.bar.Completed() {
 		t.Errorf("Should not be complete!")
 	}
 	if err := worker.UpdateExpectedTotal(-1); err != nil {
 		t.Errorf("Test failed with error %v", err)
 	}
-	worker.IncrementProgressBar(9)
+	worker.incrementProgressBar(9)
 	if worker.bar.Completed() {
+		t.Errorf("Should not be complete!")
+	}
+	worker.bar.SetTotal(0, true)
+	if !worker.bar.Completed() {
 		t.Errorf("Should not be complete!")
 	}
 }

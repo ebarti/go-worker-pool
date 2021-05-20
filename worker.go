@@ -24,7 +24,6 @@ type WorkerPool interface {
 	Close() error
 	BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool
 	UpdateExpectedTotal(incrementTotalBy int) error
-	IncrementProgressBar(incrBy int)
 }
 
 // Task : interface to be implemented by a desired type
@@ -134,6 +133,7 @@ func (wp *workerPool) Work() WorkerPool {
 						})
 						return
 					}
+					wp.incrementProgressBar(1)
 				}(in)
 			}
 		}
@@ -248,12 +248,12 @@ func (wp *workerPool) notifyProgressBarDone() {
 		return
 	}
 	wp.onceBar.Do(func() {
-		wp.bar.SetTotal(0, true)
+		wp.bar.SetTotal(wp.expectedTotalBar, true)
 	})
 }
 
-// IncrementProgressBar : increments the progress bar current count by a number (if existent)
-func (wp *workerPool) IncrementProgressBar(incrBy int) {
+// incrementProgressBar : increments the progress bar current count by a number (if existent)
+func (wp *workerPool) incrementProgressBar(incrBy int) {
 	if nil == wp.bar {
 		return
 	}
