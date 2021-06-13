@@ -20,7 +20,6 @@ type WorkerPool interface {
 	Work() WorkerPool
 	OutChannel(t reflect.Type, out chan interface{})
 	CancelOnSignal(signals ...os.Signal) WorkerPool
-	IsDone() <-chan struct{}
 	Close() error
 	BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool
 	UpdateExpectedTotal(incrementTotalBy int) error
@@ -78,7 +77,7 @@ func NewWorkerPool(ctx context.Context, workerFunction Task, numberOfWorkers int
 // Send : send to workers in channel
 func (wp *workerPool) Send(in interface{}) {
 	select {
-	case <-wp.IsDone():
+	case <-wp.Ctx.Done():
 		return
 	case wp.inChan <- in:
 		return
@@ -155,7 +154,7 @@ func (wp *workerPool) out(out interface{}) error {
 		return errors.New("couldn't locate out chan")
 	}
 	select {
-	case <-wp.IsDone():
+	case <-wp.Ctx.Done():
 		return nil
 	case selectedChan <- out:
 		return nil
@@ -189,11 +188,6 @@ func (wp *workerPool) closeChannels() (err error) {
 	})
 	wp.wg.Wait()
 	return wp.err
-}
-
-// IsDone : returns a context's cancellation or error
-func (wp *workerPool) IsDone() <-chan struct{} {
-	return wp.Ctx.Done()
 }
 
 // Close : a channel if the receiver is looking for a close.
