@@ -213,54 +213,7 @@ func TestWorkerPool_WorkersNoTypeAndProgressBars(t *testing.T) {
 	}
 }
 
-func TestWorkerPool_WithProgressBars(t *testing.T) {
-
-}
-
-func TestWorkerPool_WorkersWithType(t *testing.T) {
-	ctx := context.Background()
-
-	type1task := NewTestTaskObjectOutputSave(workBasicType1())
-	type2task := NewTestTaskObjectOutputSave(workBasicType2())
-
-	workerOne := NewWorkerPool(ctx, NewTestTask(workMultipleTypeOutput()), workerCount).Work()
-
-	workerType1 := NewWorkerPool(ctx, type1task, workerCount).ReceiveFrom(reflect.TypeOf(t1), workerOne).Work()
-	workerType2 := NewWorkerPool(ctx, type2task, workerCount).ReceiveFrom(reflect.TypeOf(t2), workerOne).Work()
-
-	for i := 0; i < RunTimes; i++ {
-		workerOne.Send(i)
-	}
-	if err := workerOne.Close(); err != nil {
-		t.Error(err)
-	}
-	if err := workerType1.Close(); err != nil {
-		t.Error(err)
-	}
-	if err := workerType2.Close(); err != nil {
-		t.Error(err)
-	}
-
-	if len(type1task.outs) != RunTimes {
-		t.Errorf("did not get expected count for task 1. Wanted %d but got %d", RunTimes, len(type1task.outs))
-	}
-	if len(type2task.outs) != RunTimes {
-		t.Errorf("did not get expected count for task 2 Wanted %d but got %d", RunTimes, len(type2task.outs))
-	}
-
-	for _, v := range type1task.outs {
-		if _, ok := v.(type1); !ok {
-			t.Errorf("Error - mismatch of type 1")
-		}
-	}
-	for _, v := range type2task.outs {
-		if _, ok := v.(type2); !ok {
-			t.Errorf("Error - mismatch of type 2")
-		}
-	}
-}
-
-func TestWorkerPool_WorkersWithTypeAndNoType(t *testing.T) {
+func TestWorkerPool_WhenWorkersReceiveDifferentTypes_WorkersReceiveOnlyValuesOfCorrectType(t *testing.T) {
 	type1task := NewTestTaskObjectOutputSave(workBasicType1())
 	type2task := NewTestTaskObjectOutputSave(workBasicType2())
 	workerOne := NewWorkerPool(ctx, NewTestTask(workMultipleTypeOutput()), 100).Work()
@@ -292,6 +245,43 @@ func TestWorkerPool_WorkersWithTypeAndNoType(t *testing.T) {
 	for _, v := range type2task.outs {
 		if _, ok := v.(type2); !ok {
 			t.Errorf("Error - mismatch of type 2")
+		}
+	}
+}
+
+func TestWorkerPool_WhenTwoReceiversReceiveSameType_TheyBothGetSameValues(t *testing.T) {
+	Atype1Task := NewTestTaskObjectOutputSave(workBasicType1())
+	Btype1Task := NewTestTaskObjectOutputSave(workBasicType1())
+	workerOne := NewWorkerPool(ctx, NewTestTask(workBasic()), 100).Work()
+	Aworker := NewWorkerPool(ctx, Atype1Task, 100).ReceiveFrom(reflect.TypeOf(t1), workerOne).Work()
+	Bworker := NewWorkerPool(ctx, Btype1Task, 100).ReceiveFrom(reflect.TypeOf(t1), workerOne).Work()
+	for i := 0; i < RunTimes; i++ {
+		outType1 := type1(strconv.Itoa(i) + " type1")
+		workerOne.Send(outType1)
+	}
+	if err := workerOne.Close(); err != nil {
+		t.Error(err)
+	}
+	if err := Aworker.Close(); err != nil {
+		t.Error(err)
+	}
+	if err := Bworker.Close(); err != nil {
+		t.Error(err)
+	}
+	if len(Atype1Task.outs) != RunTimes {
+		t.Errorf("did not get expected count for task 1. Wanted %d but got %d", RunTimes, len(Atype1Task.outs))
+	}
+	if len(Btype1Task.outs) != RunTimes {
+		t.Errorf("did not get expected count for task 2 Wanted %d but got %d", RunTimes, len(Btype1Task.outs))
+	}
+	for _, v := range Atype1Task.outs {
+		if _, ok := v.(type1); !ok {
+			t.Errorf("Error - mismatch of type 1 on worker A")
+		}
+	}
+	for _, v := range Btype1Task.outs {
+		if _, ok := v.(type1); !ok {
+			t.Errorf("Error - mismatch of type 1 on worker B")
 		}
 	}
 }

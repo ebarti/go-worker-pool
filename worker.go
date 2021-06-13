@@ -3,6 +3,7 @@ package workerpool
 import (
 	"context"
 	"errors"
+	"github.com/ebarti/utils"
 	"github.com/vbauerster/mpb/v6"
 	"os"
 	"os/signal"
@@ -40,7 +41,7 @@ type workerPool struct {
 	numberOfWorkers  int64
 	inChan           chan interface{}
 	internalOutChan  chan interface{}
-	outTypedChan     map[reflect.Type]chan interface{}
+	outTypedChan     map[reflect.Type][]chan interface{}
 	sigChan          chan os.Signal
 	cancel           context.CancelFunc
 	semaphore        chan struct{}
@@ -64,7 +65,7 @@ func NewWorkerPool(ctx context.Context, workerFunction Task, numberOfWorkers int
 		inChan:          make(chan interface{}, numberOfWorkers),
 		internalOutChan: make(chan interface{}, numberOfWorkers),
 		sigChan:         make(chan os.Signal, sigChanBufferSize),
-		outTypedChan:    make(map[reflect.Type]chan interface{}),
+		outTypedChan:    make(map[reflect.Type][]chan interface{}),
 		cancel:          cancel,
 		semaphore:       make(chan struct{}, numberOfWorkers),
 		isLeader:        true,
@@ -97,7 +98,11 @@ func (wp *workerPool) ReceiveFrom(t reflect.Type, inWorker ...WorkerPool) Worker
 // This can only be called onceErr per pool or an error will be returned.
 func (wp *workerPool) OutChannel(t reflect.Type, out chan interface{}) {
 	if _, ok := wp.outTypedChan[t]; !ok {
-		wp.outTypedChan[t] = out
+		var outs []chan interface{}
+		outs = append(outs, out)
+		wp.outTypedChan[t] = outs
+	} else {
+		wp.outTypedChan[t] = append(wp.outTypedChan[t], out)
 	}
 }
 
@@ -143,20 +148,21 @@ func (wp *workerPool) Work() WorkerPool {
 // out : pushes value to workers out channel
 // Used when chaining worker pools.
 func (wp *workerPool) out(out interface{}) error {
-	selectedChan := wp.outTypedChan[reflect.TypeOf(nil)]
+	selectedChans := wp.outTypedChan[reflect.TypeOf(nil)]
 	for k, t := range wp.outTypedChan {
 		if k == reflect.TypeOf(out) {
-			selectedChan = t
+			selectedChans = t
 			break
 		}
 	}
-	if selectedChan == nil {
+	if selectedChans == nil || len(selectedChans) == 0 {
 		return errors.New("couldn't locate out chan")
 	}
 	select {
 	case <-wp.Ctx.Done():
 		return nil
-	case selectedChan <- out:
+	default:
+		utils.TeeValue(out, selectedChans...)
 		return nil
 	}
 }
