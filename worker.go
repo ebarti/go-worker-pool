@@ -199,7 +199,7 @@ func (wp *workerPool) closeChannels() (err error) {
 // Close : a channel if the receiver is looking for a close.
 // It indicates that no more data follows.
 func (wp *workerPool) Close() error {
-	for len(wp.inChan) > 0 || len(wp.semaphore) > 0 || len(wp.internalOutChan) > 0 {
+	for len(wp.inChan) > 0 || len(wp.semaphore) > 0 {
 		// block
 	}
 	if err := wp.closeChannels(); err != nil && !errors.Is(err, context.Canceled) {

@@ -37,7 +37,7 @@ type TestTaskObjectOutputSave struct {
 var (
 	t1  type1
 	t2  type2
-	ctx context.Context = context.Background()
+	ctx = context.Background()
 )
 
 func NewTestTask(wf func(in interface{}, out chan<- interface{}) error) *TestTaskObject {
