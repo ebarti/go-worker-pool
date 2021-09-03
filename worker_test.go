@@ -2,8 +2,6 @@ package workerpool
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"github.com/vbauerster/mpb/v6"
 	"github.com/vbauerster/mpb/v6/decor"
 	"math/rand"
@@ -132,87 +130,6 @@ func getBarOptions(name string) []mpb.BarOption {
 	}
 }
 
-func TestWorkerPool_WorkersNoTypeAndProgressBars(t *testing.T) {
-	type workerTest struct {
-		name             string
-		task             Task
-		numWorkers       int64
-		errExpected      bool
-		typeConvFunction func(int) interface{}
-	}
-	workerTestScenarios := []workerTest{
-		{
-			name:       "work basic",
-			task:       NewTestTask(workBasic()),
-			numWorkers: workerCount,
-			typeConvFunction: func(i int) interface{} {
-				return i
-			},
-		},
-		{
-			name:       "work basic type 1",
-			task:       NewTestTask(workBasicType1()),
-			numWorkers: workerCount,
-			typeConvFunction: func(i int) interface{} {
-				return type1(strconv.Itoa(i))
-			},
-		},
-		{
-			name:       "work basic type 2",
-			task:       NewTestTask(workBasicType2()),
-			numWorkers: workerCount,
-			typeConvFunction: func(i int) interface{} {
-				return type2(strconv.Itoa(i))
-			},
-		},
-		{
-			name:        "work with return of error",
-			task:        NewTestTask(workWithError(errors.New("test error"))),
-			errExpected: true,
-			numWorkers:  workerCount,
-			typeConvFunction: func(i int) interface{} {
-				return i
-			},
-		},
-	}
-	for _, tt := range workerTestScenarios {
-		t.Run(tt.name, func(t *testing.T) {
-			p := mpb.New()
-			workerOne := NewWorkerPool(ctx, tt.task, tt.numWorkers).BuildBar(RunTimes, p, getBarOptions(tt.name)...).Work()
-			// always need a consumer for the out tests so using basic here.
-			taskTwo := NewTestTaskObjectOutputSave(workBasic())
-			workerTwo := NewWorkerPool(ctx, taskTwo, workerCount).ReceiveFrom(nil, workerOne).BuildBar(RunTimes, p, getBarOptions(tt.name)...).Work()
-
-			for i := 0; i < RunTimes; i++ {
-				workerOne.Send(tt.typeConvFunction(i))
-			}
-
-			if err := workerOne.Close(); err != nil && !tt.errExpected {
-				fmt.Println(err)
-				t.Fail()
-			}
-			if err := workerTwo.Close(); err != nil && !tt.errExpected {
-				fmt.Println(err)
-				t.Fail()
-			}
-			if !tt.errExpected {
-				if len(taskTwo.outs) != RunTimes {
-					t.Errorf("did not get expected count for test %s. Wanted %d but got %d", tt.name, RunTimes, len(taskTwo.outs))
-				}
-				worker1 := workerOne.(*workerPool)
-				worker2 := workerTwo.(*workerPool)
-
-				if !worker1.bar.Completed() {
-					t.Error("Worker one should be done")
-				}
-				if !worker2.bar.Completed() {
-					t.Error("Worker two should be done")
-				}
-			}
-		})
-	}
-}
-
 func TestWorkerPool_WhenWorkersReceiveDifferentTypes_WorkersReceiveOnlyValuesOfCorrectType(t *testing.T) {
 	type1task := NewTestTaskObjectOutputSave(workBasicType1())
 	type2task := NewTestTaskObjectOutputSave(workBasicType2())
@@ -283,59 +200,6 @@ func TestWorkerPool_WhenTwoReceiversReceiveSameType_TheyBothGetSameValues(t *tes
 		if _, ok := v.(type1); !ok {
 			t.Errorf("Error - mismatch of type 1 on worker B")
 		}
-	}
-}
-
-func TestWorkerPool_BuildBar(t *testing.T) {
-	worker := &workerPool{}
-	if nil != worker.bar {
-		t.Errorf("Bar was built before we wanted one!")
-	}
-	p := mpb.New()
-	worker.BuildBar(10, p)
-	if nil == worker.bar {
-		t.Errorf("Failed to build bar")
-	}
-}
-
-func TestWorkerPool_IncrementProgressBar(t *testing.T) {
-	worker := &workerPool{mu: new(sync.RWMutex)}
-	p := mpb.New()
-	worker.BuildBar(10, p)
-	if nil == worker.bar {
-		t.Errorf("Failed to build bar")
-	}
-	worker.incrementProgressBar(1)
-	if worker.bar.Completed() {
-		t.Errorf("Should not be complete!")
-	}
-	worker.incrementProgressBar(9)
-	if !worker.bar.Completed() {
-		t.Errorf("Should be complete!")
-	}
-}
-
-func TestWorkerPool_UpdateExpectedTotal(t *testing.T) {
-	worker := &workerPool{mu: new(sync.RWMutex)}
-	p := mpb.New()
-	worker.BuildBar(10, p)
-	if nil == worker.bar {
-		t.Errorf("Failed to build bar")
-	}
-	worker.incrementProgressBar(1)
-	if worker.bar.Completed() {
-		t.Errorf("Should not be complete!")
-	}
-	if err := worker.UpdateExpectedTotal(-1); err != nil {
-		t.Errorf("Test failed with error %v", err)
-	}
-	worker.incrementProgressBar(9)
-	if worker.bar.Completed() {
-		t.Errorf("Should not be complete!")
-	}
-	worker.bar.SetTotal(0, true)
-	if !worker.bar.Completed() {
-		t.Errorf("Should not be complete!")
 	}
 }
 
