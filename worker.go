@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"github.com/ebarti/utils"
-	"github.com/vbauerster/mpb/v6"
 	"os"
 	"os/signal"
 	"reflect"
@@ -22,8 +21,6 @@ type WorkerPool interface {
 	OutChannel(t reflect.Type, out chan interface{})
 	CancelOnSignal(signals ...os.Signal) WorkerPool
 	Close() error
-	BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool
-	UpdateExpectedTotal(incrementTotalBy int) error
 }
 
 // Task : interface to be implemented by a desired type
@@ -35,24 +32,20 @@ type Task interface {
 
 // workerPool : a pool of workers that asynchronously execute a given task
 type workerPool struct {
-	Ctx              context.Context
-	workerTask       Task
-	err              error
-	numberOfWorkers  int64
-	inChan           chan interface{}
-	internalOutChan  chan interface{}
-	outTypedChan     map[reflect.Type][]chan interface{}
-	sigChan          chan os.Signal
-	cancel           context.CancelFunc
-	semaphore        chan struct{}
-	isLeader         bool
-	wg               *sync.WaitGroup
-	onceErr          *sync.Once
-	onceCloseOut     *sync.Once
-	onceBar          *sync.Once
-	mu               *sync.RWMutex
-	bar              *mpb.Bar
-	expectedTotalBar int64
+	Ctx             context.Context
+	workerTask      Task
+	err             error
+	numberOfWorkers int64
+	inChan          chan interface{}
+	internalOutChan chan interface{}
+	outTypedChan    map[reflect.Type][]chan interface{}
+	sigChan         chan os.Signal
+	cancel          context.CancelFunc
+	semaphore       chan struct{}
+	isLeader        bool
+	wg              *sync.WaitGroup
+	onceErr         *sync.Once
+	onceCloseOut    *sync.Once
 }
 
 // NewWorkerPool : workerPool factory. Needs a defined number of workers to instantiate.
@@ -115,7 +108,6 @@ func (wp *workerPool) Work() WorkerPool {
 		defer func() {
 			wg.Wait()
 			wp.wg.Done()
-			wp.notifyProgressBarDone()
 		}()
 		for in := range wp.inChan {
 			select {
@@ -127,7 +119,6 @@ func (wp *workerPool) Work() WorkerPool {
 				wg.Add(1)
 				go func(in interface{}) {
 					defer func() {
-						wp.incrementProgressBar(1)
 						<-wp.semaphore
 						wg.Done()
 					}()
@@ -220,45 +211,4 @@ func (wp *workerPool) runOutChanMux() {
 			}
 		}
 	}()
-}
-
-// BuildBar : creates a progress bar
-func (wp *workerPool) BuildBar(total int, p *mpb.Progress, options ...mpb.BarOption) WorkerPool {
-	wp.expectedTotalBar = int64(total)
-	wp.onceBar = new(sync.Once)
-	wp.mu = new(sync.RWMutex)
-	wp.bar = p.AddBar(int64(total), options...)
-	return wp
-}
-
-// UpdateExpectedTotal : sets the total expected by the bar
-func (wp *workerPool) UpdateExpectedTotal(incrementTotalBy int) error {
-	if nil == wp.bar {
-		return errors.New("no progress bar present")
-	}
-	wp.mu.Lock()
-	defer wp.mu.Unlock()
-	wp.expectedTotalBar += int64(incrementTotalBy)
-	wp.bar.SetTotal(wp.expectedTotalBar, false)
-	return nil
-}
-
-// notifyProgressBarDone : sets the progress bar as done
-func (wp *workerPool) notifyProgressBarDone() {
-	if nil == wp.bar {
-		return
-	}
-	wp.onceBar.Do(func() {
-		wp.bar.SetTotal(wp.expectedTotalBar, true)
-	})
-}
-
-// incrementProgressBar : increments the progress bar current count by a number (if existent)
-func (wp *workerPool) incrementProgressBar(incrBy int) {
-	if nil == wp.bar {
-		return
-	}
-	wp.mu.Lock()
-	defer wp.mu.Unlock()
-	wp.bar.IncrBy(incrBy)
 }
