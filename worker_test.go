@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/vbauerster/mpb/v6"
 	"github.com/vbauerster/mpb/v6/decor"
+	"go.uber.org/goleak"
 	"math/rand"
 	"os"
 	"reflect"
@@ -214,6 +215,7 @@ func TestWorkerPool_WorkersNoTypeAndProgressBars(t *testing.T) {
 }
 
 func TestWorkerPool_WhenWorkersReceiveDifferentTypes_WorkersReceiveOnlyValuesOfCorrectType(t *testing.T) {
+	defer goleak.VerifyNone(t)
 	type1task := NewTestTaskObjectOutputSave(workBasicType1())
 	type2task := NewTestTaskObjectOutputSave(workBasicType2())
 	workerOne := NewWorkerPool(ctx, NewTestTask(workMultipleTypeOutput()), 100).Work()
@@ -250,6 +252,7 @@ func TestWorkerPool_WhenWorkersReceiveDifferentTypes_WorkersReceiveOnlyValuesOfC
 }
 
 func TestWorkerPool_WhenTwoReceiversReceiveSameType_TheyBothGetSameValues(t *testing.T) {
+	defer goleak.VerifyNone(t)
 	Atype1Task := NewTestTaskObjectOutputSave(workBasicType1())
 	Btype1Task := NewTestTaskObjectOutputSave(workBasicType1())
 	workerOne := NewWorkerPool(ctx, NewTestTask(workBasic()), 100).Work()
